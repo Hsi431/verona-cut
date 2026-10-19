@@ -1,0 +1,8 @@
+Use case: ads-marketing
+Asset type: wide GitHub README masthead for Verona, an offline Linux design and cutting application.
+Primary request: an elegant, restrained banner that feels like an independent desktop maker tool, with tactile cut paper and precise vector cutting paths.
+Composition: panoramic landscape, about 3:1. A large, beautifully typeset "Verona" wordmark on the left with the subtitle "A native Linux home for Juliet." On the right, a considered arrangement of off-white paper shapes, teal and muted golden circular stickers with slightly lifted edges, thin traced cutting contours, a few precise anchor points, and a subtle cutting-mat grid. Give both halves generous breathing room. It should read clearly at the width of a GitHub README.
+Style: polished editorial still life with crisp typography, subtle paper texture, quiet studio lighting and shallow physical depth; refined, useful, approachable, not flashy.
+Palette: deep charcoal #1b2225 background, warm off-white paper, restrained teal #0a8178 and muted ochre #dcba62 accents, matching the application's dark interface.
+Text (verbatim): "Verona" and "A native Linux home for Juliet."
+Constraints: original artwork only. No manufactured cutter or branded hardware, no vendor logos, no official product assets, no cloud imagery, no AI imagery, no fake UI panels, no extra slogans or explanatory labels, no watermark. Opaque background.

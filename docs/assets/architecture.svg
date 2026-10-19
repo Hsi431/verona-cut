@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="760" viewBox="0 0 1440 760" role="img" aria-labelledby="title desc">
+  <title id="title">Verona architecture</title>
+  <desc id="desc">Artwork and local documents enter the desktop editor. The editor renders print and PDF output locally. The GUI, CLI and optional MCP server share validated job construction. Explicit sends use a device lock and Wi-Fi or experimental USB transport to the cutter. MCP also connects to the editor through a local bridge.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+      <path d="M1 1 L7 4 L1 7" fill="none" stroke="#80cfc3" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <style>
+      text { font-family: 'Noto Sans', 'DejaVu Sans', sans-serif; }
+      .title { font-size: 34px; font-weight: 600; fill: #f3efe5; }
+      .subtitle { font-size: 18px; fill: #aebdc0; }
+      .section { font-size: 13px; font-weight: 600; letter-spacing: 2px; fill: #80cfc3; }
+      .card { fill: #252f33; stroke: #46585c; stroke-width: 1.2; }
+      .core { fill: #203a38; stroke: #80cfc3; stroke-width: 1.4; }
+      .heading { font-size: 22px; font-weight: 600; fill: #f3efe5; }
+      .body { font-size: 17px; fill: #c1ced0; }
+      .code { font-family: 'DejaVu Sans Mono', monospace; font-size: 15px; fill: #a9c4c1; }
+      .flow { fill: none; stroke: #80cfc3; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#arrow); }
+      .note { font-size: 14px; fill: #aebdc0; }
+    </style>
+  </defs>
+  <rect width="1440" height="760" rx="16" fill="#1b2225"/>
+  <text x="50" y="59" class="title">Inside Verona</text>
+  <text x="50" y="92" class="subtitle">Local documents. Shared validation. Explicit output.</text>
+  <rect x="30" y="132" width="1380" height="423" rx="16" fill="none" stroke="#46585c" stroke-dasharray="5 6"/>
+  <text x="50" y="160" class="section">YOUR LINUX COMPUTER</text>
+
+  <rect x="50" y="195" width="260" height="110" rx="12" class="card"/>
+  <text x="70" y="230" class="heading">Artwork &amp; files</text>
+  <text x="70" y="261" class="body">.lds · SVG · raster · PDF</text>
+  <text x="70" y="286" class="code">local .jdesign files</text>
+
+  <rect x="370" y="195" width="290" height="110" rx="12" class="card"/>
+  <text x="390" y="230" class="heading">Desktop editor</text>
+  <text x="390" y="261" class="body">Paths · layers · layout · undo</text>
+  <text x="390" y="286" class="code">ui.py · editor modules</text>
+
+  <rect x="720" y="195" width="290" height="110" rx="12" class="card"/>
+  <text x="740" y="230" class="heading">CLI + optional MCP</text>
+  <text x="740" y="261" class="body">Status · prepare · explicit send</text>
+  <text x="740" y="286" class="code">cli.py · mcp_server.py</text>
+  <text x="1038" y="235" class="note">MCP editor bridge:</text>
+  <text x="1038" y="260" class="note">local socket, revision checks,</text>
+  <text x="1038" y="285" class="note">preview before applying edits.</text>
+
+  <rect x="370" y="395" width="290" height="130" rx="12" class="card"/>
+  <text x="390" y="432" class="heading">Print / PDF rendering</text>
+  <text x="390" y="463" class="body">System printer · local PDF</text>
+  <text x="390" y="495" class="code">printing.py · artwork.py</text>
+
+  <rect x="720" y="395" width="290" height="130" rx="12" class="core"/>
+  <text x="740" y="432" class="heading">Shared job builder</text>
+  <text x="740" y="463" class="body">Bounds · tools · force · speed</text>
+  <text x="740" y="495" class="code">commands.py · path_order.py</text>
+
+  <rect x="1080" y="395" width="310" height="130" rx="12" class="card"/>
+  <text x="1100" y="432" class="heading">Transport + device lock</text>
+  <text x="1100" y="463" class="body">Explicit send · no auto replay</text>
+  <text x="1100" y="495" class="code">transport.py · device_lock.py</text>
+
+  <rect x="1080" y="615" width="310" height="100" rx="12" fill="#34342c" stroke="#daba69" stroke-width="1.2"/>
+  <text x="1100" y="651" class="heading">Siser Juliet</text>
+  <text x="1100" y="684" class="body">Local Wi-Fi · experimental USB</text>
+
+  <path d="M310 250 H370" class="flow"/>
+  <path d="M515 305 V395" class="flow"/>
+  <path d="M620 305 V350 H865" fill="none" stroke="#80cfc3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M865 305 V395" class="flow"/>
+  <circle cx="865" cy="350" r="4" fill="#80cfc3"/>
+  <text x="743" y="380" class="note">validated cut paths</text>
+  <path d="M1010 460 H1080" class="flow"/>
+  <path d="M1235 525 V615" class="flow"/>
+  <text x="1080" y="587" class="note">Wi-Fi TCP 8080 / USB</text>
+
+  <path d="M720 205 H685 V180 H515 V195" class="flow" stroke-dasharray="4 5" marker-start="url(#arrow)"/>
+  <text x="50" y="616" class="section">SAFE TO PREVIEW</text>
+  <text x="50" y="648" class="body">CLI dry runs validate and export PLT without a device connection.</text>
+  <text x="50" y="679" class="body">Editing, previews and printing do not send cutter commands.</text>
+  <text x="50" y="731" class="note">No account, cloud service or internet connection is required after installation.</text>
+</svg>

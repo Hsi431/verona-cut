@@ -1,10 +1,14 @@
 # Verona
 
+![Verona — A native Linux home for Juliet.](docs/assets/banner.png)
+
 **A native Linux home for Juliet.**
 
 Verona is an independent, offline design and cutting application for **Siser Juliet**.
 Import artwork, edit paths, arrange a sheet, print at actual size and send a cut
 directly over local Wi-Fi—all from one Linux desktop application.
+
+![Verona's English dark interface with six contour stickers, registration marks and layer controls.](docs/assets/editor-dark.png)
 
 ## Why Verona?
 
@@ -21,7 +25,9 @@ No storefront, online asset library or background cloud synchronization.
 
 ## Features
 
-- SVG vectors, raster artwork and PDF page import; supported `.lds` documents open read-only.
+- **Open existing `.lds` projects:** import supported artwork and save edits as `.jdesign`, keeping the source untouched.
+- **Optional local MCP server:** review and apply undoable editor changes from an MCP client.
+- SVG vectors, raster artwork and PDF page import.
 - Shapes, text outlines, node and curve editing, masks, contour tracing and printed bleed.
 - Move, resize, rotate, mirror, group, align, distribute and automatically arrange artwork.
 - Multiple document tabs, undo/redo, light/dark themes, English and Traditional Chinese.
@@ -30,7 +36,6 @@ No storefront, online asset library or background cloud synchronization.
 - Print & Cut registration marks, measured alignment correction, direct printing and PDF export.
 - Local `.jdesign` files, PLT export, `.lds` thumbnails and desktop file associations.
 - Wi-Fi version checks and bounded cut jobs; CLI dry runs without any device connection.
-- Optional local MCP interface for reviewing and applying undoable editor changes.
 
 **Status: alpha.** Juliet Wi-Fi cutting and Print & Cut have been used on real
 hardware. USB-B delivery is experimental. Romeo has not been tested and is not
@@ -44,19 +49,22 @@ printed or exported as PDF without registration marks.
 
 ## Install and open
 
-Requires Linux and Python 3.11 or newer. From the repository directory:
+Requires Linux and Python 3.11 or newer. On Ubuntu/Mint X11, install the
+system dependencies if missing:
 
 ```bash
+sudo apt install git python3-venv libxcb-cursor0 libegl1 libopengl0
+```
+
+Download, install and open:
+
+```bash
+git clone https://github.com/Hsi431/verona-cut.git
+cd verona-cut
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install .
 verona
-```
-
-On Ubuntu/Mint X11, install the system dependencies if missing:
-
-```bash
-sudo apt install python3-venv libxcb-cursor0 libegl1 libopengl0
 ```
 
 Dependencies are downloaded during installation; normal editing and cutting
@@ -76,8 +84,9 @@ Connection checks query the version; they do not confirm that the machine is
 idle or that material is loaded.
 
 For optional `.lds` file associations and thumbnails, run `verona-desktop`.
-This changes only the current user's desktop configuration. Restart an
-already-running Nemo after the first installation to load the thumbnailer.
+This changes only the current user's desktop configuration. Restart your
+file manager after the first installation to reload thumbnailers. Thumbnail
+support depends on the file manager; it has been verified with Nemo.
 
 ## CLI
 
@@ -117,6 +126,8 @@ Verona does not provide a verified remote emergency-stop command.
 
 ## Development
 
+![Verona architecture: artwork enters the desktop editor; the GUI, CLI and optional MCP share a validated job builder, with local print/PDF output and explicit cutter transport.](docs/assets/architecture.svg)
+
 ```bash
 python -m pip install -e '.[mcp]'
 QT_QPA_PLATFORM=offscreen python -m unittest discover -s tests -v
@@ -136,9 +147,10 @@ Dependencies retain their [own licenses](THIRD_PARTY_NOTICES.md).
 ## Disclaimer
 
 Verona is an independent, unofficial project for interoperability on Linux.
-It is not affiliated with, endorsed by or supported by Siser. Siser, Juliet,
-Romeo and Leonardo Design Studio are trademarks of their respective owners,
-used here only to identify compatibility.
+It is not affiliated with, endorsed by or supported by Siser S.r.l. or
+Siser North America, Inc. Siser, Juliet, Romeo and Leonardo Design Studio
+are trademarks of their respective owners, used here only to identify
+compatibility.
 
 Use at your own risk. The authors and contributors accept no responsibility
 for hardware damage, voided warranties, ruined materials or personal injury.
