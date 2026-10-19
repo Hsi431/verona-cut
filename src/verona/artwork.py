@@ -1,0 +1,179 @@
+"""Shared printed artwork geometry; bleed never changes cutting contours."""
+import math
+import re
+
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtGui import QColor, QPainterPath, QPainterPathStroker, QPen, QTransform
+
+from .raster_import import _offset_path, decode_embedded_image
+from .layers import printable
+
+
+def contour_path(contours):
+    path = QPainterPath()
+    for contour in contours:
+        if contour:
+            path.moveTo(*contour[0])
+            for point in contour[1:]:
+                path.lineTo(*point)
+            if len(contour) > 2 and contour[0] == contour[-1]:
+                path.closeSubpath()
+    return path
+
+
+def validate_bleed(value):
+    if (not isinstance(value, dict) or not {"width_mm", "color"} <= set(value)
+            or set(value) - {"width_mm", "color", "inner_mm", "mode"}):
+        raise ValueError("Bleed requires width_mm and a #RRGGBB color.")
+    width = value["width_mm"]
+    if (isinstance(width, bool) or not isinstance(width, (int, float))
+            or not math.isfinite(width) or not 0 <= width <= 5
+            or not isinstance(value["color"], str)
+            or not re.fullmatch(r"#[0-9a-fA-F]{6}", value["color"])):
+        raise ValueError("Bleed width must be 0–5 mm and color must be #RRGGBB.")
+    inner = value.get("inner_mm", 0)
+    if isinstance(inner, bool) or not isinstance(inner, (int, float)) or not math.isfinite(inner) or not 0 <= inner <= 1:
+        raise ValueError("Inner bleed must be a finite width from 0 to 1 mm.")
+    result = {"width_mm": float(width), "color": value["color"].lower()}
+    if inner:
+        result["inner_mm"] = float(inner)
+    mode = value.get("mode", "solid")
+    if mode not in ("solid", "edge"):
+        raise ValueError("Bleed mode must be solid or edge.")
+    if mode == "edge":
+        result["mode"] = mode
+    return result
+
+
+def image_path(item):
+    if item.get("image_clip"):
+        return contour_path(item["image_clip"])
+    image = decode_embedded_image(item["image_data"])
+    path = QPainterPath()
+    path.addRect(QRectF(0, 0, image.width(), image.height()))
+    tx, ty, a, b, c, d = item["image_transform"]
+    return QTransform(a, b, c, d, tx, ty).map(path)
+
+
+def bleed_path(item):
+    bleed = item.get("bleed")
+    if not bleed or not bleed["width_mm"]:
+        return QPainterPath()
+    base = contour_path(item["contours"])
+    return _offset_path(base, bleed["width_mm"]).subtracted(base)
+
+
+def draw_bleed(painter, item):
+    if item.get("bleed", {}).get("width_mm"):
+        if item["bleed"].get("mode") == "edge":
+            from .edge_bleed import draw_edge_bleed
+            draw_edge_bleed(painter, item)
+        else:
+            painter.fillPath(bleed_path(item), QColor(item["bleed"]["color"]))
+
+
+def inner_bleed_path(item):
+    width = item.get("bleed", {}).get("inner_mm", 0)
+    if not width:
+        return QPainterPath()
+    base = contour_path(item["contours"])
+    return base.subtracted(_offset_path(base, -width))
+
+
+def draw_inner_bleed(painter, item):
+    if item.get("bleed", {}).get("inner_mm"):
+        painter.fillPath(inner_bleed_path(item), QColor(item["bleed"]["color"]))
+
+
+def draw_printed_item(painter, item, *, image=None, clip_path=None, outer_path=None,
+                      inner_path=None, bleed_layer=None):
+    """Draw one printed item in document order, accepting the canvas's cached geometry."""
+    if not printable(item):
+        return
+    if "image_data" not in item:
+        draw_vector_print(painter, item)
+        return
+    bleed = item.get("bleed", {})
+    painter.save()
+    try:
+        if bleed.get("width_mm"):
+            if bleed.get("mode") == "edge":
+                from .edge_bleed import draw_edge_bleed
+                draw_edge_bleed(painter, item, bleed_layer)
+            else:
+                painter.fillPath(outer_path if outer_path is not None else bleed_path(item), QColor(bleed["color"]))
+        if item.get("image_clip"):
+            painter.setClipPath(clip_path if clip_path is not None else contour_path(item["image_clip"]),
+                                Qt.ClipOperation.IntersectClip)
+        tx, ty, a, b, c, d = item["image_transform"]
+        painter.setTransform(QTransform(a, b, c, d, tx, ty), True)
+        painter.drawImage(QPointF(0, 0), decode_embedded_image(item["image_data"]) if image is None else image)
+    finally:
+        painter.restore()
+    if bleed.get("inner_mm"):
+        painter.fillPath(inner_path if inner_path is not None else inner_bleed_path(item), QColor(bleed["color"]))
+
+
+def item_bounds(item, *, printed=False):
+    bounds = contour_path(item["contours"]).controlPointRect()
+    if printed and printable(item) and "image_data" in item:
+        printed_path = image_path(item)
+        if item.get("bleed", {}).get("width_mm"):
+            printed_path = printed_path.united(bleed_path(item))
+        bounds = bounds.united(printed_path.controlPointRect())
+    elif printed and printable(item) and item.get("print_style"):
+        bounds = bounds.united(vector_print_path(item).controlPointRect())
+    return bounds
+
+
+def validate_print_style(value):
+    if not isinstance(value, dict) or set(value) != {"fill", "stroke", "width_mm"}:
+        raise ValueError("Vector print style requires fill, stroke and width_mm.")
+    result = dict(value)
+    for key in ("fill", "stroke"):
+        color = value[key]
+        if color is not None:
+            if not isinstance(color, str) or not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+                raise ValueError("Print colors must be #RRGGBB or null.")
+            result[key] = color.lower()
+    width = value["width_mm"]
+    if isinstance(width, bool) or not isinstance(width, (int, float)) or not math.isfinite(width) or not .01 <= width <= 5:
+        raise ValueError("Printed stroke width must be0.01–5mm.")
+    result["width_mm"] = float(width)
+    return result
+
+
+def vector_print_path(item):
+    style = item.get("print_style")
+    if not style:
+        return QPainterPath()
+    path = contour_path(item["contours"])
+    result = path if style["fill"] else QPainterPath()
+    if style["stroke"]:
+        stroker = QPainterPathStroker()
+        stroker.setWidth(style["width_mm"])
+        stroker.setCapStyle(Qt.PenCapStyle.RoundCap)
+        stroker.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        result = result.united(stroker.createStroke(path))
+    return result
+
+
+def draw_vector_print(painter, item):
+    style = item.get("print_style")
+    if not style:
+        return
+    painter.save()
+    painter.setBrush(QColor(style["fill"]) if style["fill"] else Qt.BrushStyle.NoBrush)
+    if style["stroke"]:
+        pen = QPen(QColor(style["stroke"]), style["width_mm"])
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+    else:
+        painter.setPen(Qt.PenStyle.NoPen)
+    painter.drawPath(contour_path(item["contours"]))
+    painter.restore()
+
+
+def bounds_list(bounds):
+    return [bounds.left(), bounds.top(), bounds.right(), bounds.bottom()]
