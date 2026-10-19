@@ -2,8 +2,6 @@
 
 ![Verona — A native Linux home for Juliet.](docs/assets/banner.png)
 
-**A native Linux home for Juliet.**
-
 Verona is an independent, offline design and cutting application for **Siser Juliet**.
 Import artwork, edit paths, arrange a sheet, print at actual size and send a cut
 directly over local Wi-Fi—all from one Linux desktop application.
