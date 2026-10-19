@@ -1,6 +1,6 @@
 include LICENSE README.md THIRD_PARTY_NOTICES.md .gitignore
 include install.sh run.sh run-en.sh run-zh-TW.sh run-desktop.sh install-desktop.sh
-recursive-include docs *.md *.png *.svg *.txt
+recursive-include docs *.md *.png *.svg
 recursive-include scripts *.py *.sh
 recursive-include tests *.py
 recursive-include examples *.svg *.png *.jdesign *.plt
