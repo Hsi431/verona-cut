@@ -33,7 +33,7 @@ No storefront, online asset library or background cloud synchronization.
 - Explicit **Print only / Cut only / Print and cut** image import; change output later without losing the image.
 - Print & Cut registration marks, measured alignment correction, direct printing and PDF export.
 - Local `.jdesign` files, PLT export, `.lds` thumbnails and desktop file associations.
-- Wi-Fi version checks and bounded cut jobs; CLI dry runs without any device connection.
+- Wi-Fi version checks, cutter system information and bounded cut jobs; CLI dry runs without any device connection.
 - 1–10 cutting passes per contour, with one Print & Cut registration scan per job.
 
 **Status: alpha.** Juliet Wi-Fi cutting and Print & Cut have been used on real

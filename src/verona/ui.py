@@ -1334,7 +1334,13 @@ class VeronaWindow(QMainWindow):
         connection_layout.addLayout(self.connection_form)
         self.wifi_check_button = QPushButton(tr("檢查連線"))
         self.wifi_check_button.clicked.connect(self.check_wifi_connection)
-        connection_layout.addWidget(self.wifi_check_button)
+        wifi_buttons = QHBoxLayout()
+        wifi_buttons.setSpacing(6)
+        wifi_buttons.addWidget(self.wifi_check_button)
+        self.system_info_button = QPushButton(tr("系統資訊…"))
+        self.system_info_button.clicked.connect(self.show_system_info)
+        wifi_buttons.addWidget(self.system_info_button)
+        connection_layout.addLayout(wifi_buttons)
         self.usb_row = QWidget()
         usb_layout = QHBoxLayout(self.usb_row)
         usb_layout.setContentsMargins(0, 0, 0, 0)
@@ -1379,6 +1385,7 @@ class VeronaWindow(QMainWindow):
         self.connection_form.setRowVisible(self.wifi_host, wifi)
         self.connection_form.setRowVisible(self.wifi_port, wifi)
         self.wifi_check_button.setVisible(wifi)
+        self.system_info_button.setVisible(wifi)
         self.usb_row.setVisible(not wifi)
 
     def refresh_usb_devices(self) -> None:
@@ -1438,6 +1445,15 @@ class VeronaWindow(QMainWindow):
                 return transport.query_tcp_version(host, port)
 
         self._dispatch(query, succeeded, failed)
+
+    def show_system_info(self) -> None:
+        from .system_info import SystemInfoDialog
+        dialog = SystemInfoDialog(self)
+        try:
+            dialog.refresh()
+            dialog.exec()
+        finally:
+            dialog.deleteLater()
 
     @Slot(object, object)
     def _task_succeeded(self, task: FunctionTask, result: Any) -> None:
@@ -1679,6 +1695,10 @@ class VeronaWindow(QMainWindow):
             group.addAction(action)
             language_menu.addAction(action)
             action.triggered.connect(lambda _checked=False, value=code: self._change_language(value))
+        help_menu = self.menuBar().addMenu(tr("說明"))
+        self.system_info_action = QAction(tr("系統資訊…"), self)
+        self.system_info_action.triggered.connect(self.show_system_info)
+        help_menu.addAction(self.system_info_action)
         self.refresh_properties()
 
     def canvas_context_menu(self) -> QMenu:

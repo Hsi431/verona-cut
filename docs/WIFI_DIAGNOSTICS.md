@@ -1,5 +1,10 @@
 # Wi-Fi identity diagnostics
 
+In the GUI, open **Help → System information…** or use **System information…**
+under **Send connection**. The dialog reads the current Wi-Fi endpoint in the
+background and offers manual refresh. **Copy information** includes only the
+six supported identity fields, omitting the IP address and device identifiers.
+
 Use the address shown on the cutter's screen:
 
 ```bash
