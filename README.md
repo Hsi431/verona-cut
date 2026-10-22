@@ -23,7 +23,7 @@ No storefront, online asset library or background cloud synchronization.
 
 ## Features
 
-- **Open existing `.lds` projects:** import supported artwork and save edits as `.jdesign`, keeping the source untouched.
+- **Open and save `.lds` projects:** edit supported native artwork or keep an editable `.jdesign` file.
 - **Optional local MCP server:** review and apply undoable editor changes from an MCP client.
 - SVG vectors, raster artwork and PDF page import.
 - Shapes, text outlines, node and curve editing, masks, contour tracing and printed bleed.
@@ -44,6 +44,14 @@ Hidden layers are excluded from printing and cutting. Locked layers still
 output normally but cannot be moved or edited until unlocked. Layer changes
 support undo/redo and are saved in the design. Print-only sheets can be
 printed or exported as PDF without registration marks.
+
+**LDS saving is experimental.** Use **Save** to write back to an opened `.lds`,
+or **Save design as…** (`Ctrl+Shift+S`) to choose `.jdesign` or `.lds`.
+The first overwrite preserves the original as `<filename>.lds.bak`.
+Verona retains its complete editing data alongside native print/cut output.
+Printed vectors and bleed are rasterized at 300 DPI in the native output;
+their original sources remain editable in Verona. Other applications may
+ignore the extra editing data. Official Leonardo compatibility is unverified.
 
 ## Install and open
 
@@ -81,7 +89,8 @@ verona --lang en --host "$VERONA_HOST" --open examples/pen-calibration.jdesign
 Connection checks query the version; they do not confirm that the machine is
 idle or that material is loaded.
 
-For optional `.lds` file associations and thumbnails, run `verona-desktop`.
+To open `.jdesign` and `.lds` files by double-clicking and enable `.lds`
+thumbnails, run `verona-desktop`.
 This changes only the current user's desktop configuration. Restart your
 file manager after the first installation to reload thumbnailers. Thumbnail
 support depends on the file manager; it has been verified with Nemo.

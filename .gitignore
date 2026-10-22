@@ -27,6 +27,7 @@ firmware/
 *.elf
 *.dmg
 *.lds
+*.lds.bak
 *.jdesign
 *.plt
 !examples/*.jdesign

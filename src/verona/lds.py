@@ -1,4 +1,4 @@
-"""Read Leonardo's ZIP/CDOC vector and bitmap records without rewriting them.
+"""Read native ZIP/CDOC vectors, bitmaps and Verona editing extensions.
 
 Bitmap masks and cutting curves are separate; an ARMS group's geometry is a
 registration reference, not a cutting path.
@@ -34,6 +34,7 @@ _MAX_POINTS = 2_000_000
 class NativeDesign:
     items: list[dict]
     metadata: dict
+    settings: dict | None = None
 
 
 @dataclass
@@ -144,6 +145,19 @@ def load_lds(filename, tolerance=0.05):
         if len(members) != 1 or not 52 <= members[0].file_size <= _MAX_DOCUMENT:
             raise _invalid("missing or oversized CDOC")
         data = archive.read(members[0])
+        editable = None
+        snapshots = [entry for entry in archive.infolist() if entry.filename == "VERONA.json"]
+        if len(snapshots) > 1:
+            raise _invalid("duplicate Verona editing data")
+        if snapshots:
+            from .input_safety import MAX_DESIGN_BYTES, decode_design
+            if snapshots[0].file_size > MAX_DESIGN_BYTES:
+                raise _invalid("oversized Verona editing data")
+            candidate = decode_design(archive.read(snapshots[0]))
+            if not isinstance(candidate, dict):
+                raise _invalid("invalid Verona editing data")
+            if candidate.get("cdoc_sha256") == hashlib.sha256(data).hexdigest():
+                editable = candidate
         preview = None
         if "PREVIEW" in archive.namelist():
             entry = archive.getinfo("PREVIEW")
@@ -318,6 +332,10 @@ def load_lds(filename, tolerance=0.05):
             visit(child, is_registration, group_path)
 
     visit(root)
+    if editable is not None:
+        from .ui import VeronaWindow
+        saved_items, settings = VeronaWindow._validate_document(editable)
+        return NativeDesign(saved_items, editable.get("metadata", {}), settings)
     if not items:
         raise _invalid("document has no supported geometry")
     metadata = {"source_format": "lds", "source_name": Path(filename).name,

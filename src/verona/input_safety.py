@@ -28,7 +28,14 @@ def read_bounded(filename, limit):
 
 
 def read_design(filename):
-    text = read_bounded(filename, MAX_DESIGN_BYTES).decode("utf-8")
+    return decode_design(read_bounded(filename, MAX_DESIGN_BYTES))
+
+
+def decode_design(data):
+    """Apply the same JSON budgets to files and embedded editable documents."""
+    if len(data) > MAX_DESIGN_BYTES:
+        raise ValueError(tr("檔案超過 {limit} MiB，請拆分文件後重試。", limit=MAX_DESIGN_BYTES / 1024**2))
+    text = data.decode("utf-8")
     depth = tokens = 0
     quoted, escape_at = False, -2
     # Scan punctuation without copying large embedded image strings. Brackets

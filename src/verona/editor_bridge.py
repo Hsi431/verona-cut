@@ -299,7 +299,7 @@ class EditorBridge(QObject):
             raise ValueError("overwrite must be a boolean.")
         destination = Path(path).expanduser().resolve()
         if destination.suffix.lower() not in (".jdesign", ".json"):
-            raise ValueError("Save as .jdesign or .json; native LDS files cannot be overwritten.")
+            raise ValueError("Automation saves .jdesign or .json; use the GUI to save LDS files.")
         self.window._write_document(str(destination), overwrite=overwrite)
         return self.state()
 

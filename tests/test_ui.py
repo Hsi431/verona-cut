@@ -76,8 +76,8 @@ class DesignUiTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             output = Path(folder) / "native.jdesign"
             with patch.object(QFileDialog, "getSaveFileName", return_value=(str(output), "Design")) as dialog:
-                self.assertTrue(self.window.save_design())
-                self.assertEqual(dialog.call_args.args[2], "native.jdesign")
+                self.assertTrue(self.window.save_design(save_as=True))
+                self.assertEqual(Path(dialog.call_args.args[2]).name, "native.lds")
             reopened = VeronaWindow()
             with patch.object(QFileDialog, "getOpenFileName", return_value=(str(output), "Design")):
                 reopened.open_design()

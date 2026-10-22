@@ -1,4 +1,4 @@
-"""Install per-user LDS file associations and embedded-preview thumbnails."""
+"""Install per-user design file associations and LDS preview thumbnails."""
 import argparse
 import os
 from pathlib import Path
@@ -7,6 +7,7 @@ import sys
 
 
 LDS_MIME = "application/x-leonardo-design"
+DESIGN_MIME = "application/x-verona-design"
 
 
 def _exec_argument(value):
@@ -35,10 +36,17 @@ def install_desktop():
             f"Exec={python} -m verona.desktop_integration --launch {language.replace('-', '_')} %f\n"
             "Icon=applications-graphics\nTerminal=false\n"
             "Categories=Graphics;2DGraphics;VectorGraphics;\nStartupNotify=true\n"
-            f"MimeType={LDS_MIME};\n", encoding="utf-8")
+            f"MimeType={DESIGN_MIME};{LDS_MIME};\n", encoding="utf-8")
     (mime/"packages/verona.xml").write_text(
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">\n'
+        f'  <mime-type type="{DESIGN_MIME}">\n'
+        '    <comment>Verona design</comment>\n'
+        '    <comment xml:lang="zh_TW">Verona 設計文件</comment>\n'
+        '    <glob pattern="*.jdesign"/>\n'
+        '    <sub-class-of type="application/json"/>\n'
+        '    <generic-icon name="x-office-drawing"/>\n'
+        '  </mime-type>\n'
         f'  <mime-type type="{LDS_MIME}">\n'
         '    <comment>Leonardo Design Studio document</comment>\n'
         '    <comment xml:lang="zh_TW">Leonardo 設計文件</comment>\n'
@@ -53,7 +61,8 @@ def install_desktop():
         f"MimeType={LDS_MIME};\n", encoding="utf-8")
     subprocess.run(["update-mime-database", str(mime)], check=True)
     subprocess.run(["update-desktop-database", str(applications)], check=True)
-    subprocess.run(["xdg-mime", "default", "verona-en.desktop", LDS_MIME], check=True)
+    for mime_type in (DESIGN_MIME, LDS_MIME):
+        subprocess.run(["xdg-mime", "default", "verona-en.desktop", mime_type], check=True)
 
 
 def main(argv=None):
@@ -65,8 +74,8 @@ def main(argv=None):
         from .ui import main as launch
         return launch(["--lang", args.launch, *(["--open", args.document] if args.document else [])])
     install_desktop()
-    print("Installed LDS thumbnails and file associations for the current user.")
-    print("First installation: restart an already-running Nemo to load the new thumbnailer; F5 alone is insufficient.")
+    print("Installed JDESIGN/LDS file associations and LDS thumbnails for the current user.")
+    print("First installation: restart your file manager to reload thumbnailers (verified with Nemo).")
 
 
 if __name__ == "__main__":

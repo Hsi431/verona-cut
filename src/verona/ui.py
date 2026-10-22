@@ -11,6 +11,7 @@ import json
 import math
 import os
 import re
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -18,7 +19,7 @@ from typing import Any
 
 from PySide6.QtCore import QEvent, QObject, QPointF, QRunnable, QRectF, Qt, QTemporaryDir, QThreadPool, QSettings, Signal, Slot
 from PySide6.QtGui import (
-    QAction, QActionGroup, QColor, QCursor, QFont, QImage, QPainter, QPainterPath, QPainterPathStroker, QPen, QPixmap,
+    QAction, QActionGroup, QColor, QContextMenuEvent, QCursor, QFont, QImage, QPainter, QPainterPath, QPainterPathStroker, QPen, QPixmap,
     QTransform, QPalette,
 )
 from PySide6.QtWidgets import (
@@ -152,6 +153,7 @@ class DesignCanvas(QWidget):
         self._path_cache = {}
         self.drag_duplicate = False
         self.drag_moved = False
+        self.drag_toggle_selection = None
         self.drag_handle = None
         self.drag_bounds = None
         self.handle_points = {}
@@ -163,7 +165,8 @@ class DesignCanvas(QWidget):
         self.marquee_before = set()
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMouseTracking(True)
-        self.setToolTip(tr("拖曳四角縮放、上方圓點旋轉；Shift 旋轉每次 15°；Esc 取消拖曳。"))
+        self.setToolTip(tr("右鍵開啟物件選單；Shift 拖曳鎖定水平／垂直，Alt 拖曳複製。\n"
+                           "拖曳四角縮放、上方圓點旋轉；Shift 旋轉每次 15°；Esc 取消拖曳。"))
         self._resize_to_page()
 
     def _resize_to_page(self) -> None:
@@ -383,10 +386,42 @@ class DesignCanvas(QWidget):
                 painter.drawText(QPointF(0, 0), str(value))
                 painter.restore()
 
+    def item_at(self, point: QPointF, *, include_locked=False) -> int:
+        for index in range(len(self.owner.items) - 1, -1, -1):
+            item = self.owner.items[index]
+            if (item.get("registration_guide", False) or not item.get("visible", True)
+                    or (not include_locked and not editable(item))):
+                continue
+            path = self.item_path(item)
+            if not path.controlPointRect().adjusted(-6, -6, 6, 6).contains(point):
+                continue
+            stroker = QPainterPathStroker()
+            stroker.setWidth(3.0)
+            if path.contains(point) or stroker.createStroke(path).contains(point):
+                return index
+        return -1
+
+    def contextMenuEvent(self, event: Any) -> None:
+        if (not self.interactive or self.drag_before is not None
+                or self.marquee_start is not None or self.pan_start is not None):
+            event.ignore()
+            return
+        if event.reason() == QContextMenuEvent.Reason.Mouse:
+            hit = self.item_at(self._world_point(QPointF(event.pos())), include_locked=True)
+            if hit >= 0 and hit not in self.owner.selected_indices():
+                self.owner.select(hit)
+        menu = self.owner.canvas_context_menu()
+        try:
+            menu.exec(event.globalPos())
+        finally:
+            menu.deleteLater()
+        event.accept()
+
     def mousePressEvent(self, event: Any) -> None:
         if not self.interactive or event.button() != Qt.MouseButton.LeftButton:
             return
         self.setFocus()
+        self.drag_toggle_selection = None
         if self.space_pressed:
             self.pan_start = event.globalPosition() if hasattr(event, "globalPosition") else event.position()
             self.pan_scroll = (self.owner.canvas_scroll.horizontalScrollBar().value(),
@@ -405,19 +440,7 @@ class DesignCanvas(QWidget):
             self.drag_duplicate = False
             self.drag_moved = False
             return
-        hit = -1
-        for index in range(len(self.owner.items) - 1, -1, -1):
-            item = self.owner.items[index]
-            if item.get("registration_guide", False) or not item.get("visible", True) or not editable(item):
-                continue
-            path = self.item_path(self.owner.items[index])
-            if not path.controlPointRect().adjusted(-6, -6, 6, 6).contains(point):
-                continue
-            stroker = QPainterPathStroker()
-            stroker.setWidth(3.0)
-            if path.contains(point) or stroker.createStroke(path).contains(point):
-                hit = index
-                break
+        hit = self.item_at(point)
         if hit < 0:
             self.marquee_start = self.marquee_end = point
             self.marquee_before = self.owner.selected_indices()
@@ -426,10 +449,15 @@ class DesignCanvas(QWidget):
             self.owner.select_many(self.marquee_base)
             self.update()
             return
-        if modifiers & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier):
+        if (modifiers & Qt.KeyboardModifier.ControlModifier
+                or (modifiers & Qt.KeyboardModifier.ShiftModifier and not modifiers & Qt.KeyboardModifier.AltModifier)):
             selected = self.owner.selected_indices()
             if hit in selected:
-                selected.difference_update(expand_selection(self.owner.items, [hit]))
+                if modifiers & Qt.KeyboardModifier.ControlModifier:
+                    selected.difference_update(expand_selection(self.owner.items, [hit]))
+                else:
+                    # A Shift click toggles selection only if it does not become a drag.
+                    self.drag_toggle_selection = hit
             elif hit >= 0:
                 selected.update(expand_selection(self.owner.items, [hit]))
             self.owner.select_many(selected)
@@ -473,12 +501,14 @@ class DesignCanvas(QWidget):
             return
         point = self._world_point(event.position())
         delta = point - self.drag_start
+        modifiers = event.modifiers() if hasattr(event, "modifiers") else Qt.KeyboardModifier.NoModifier
+        if not self.drag_handle and modifiers & Qt.KeyboardModifier.ShiftModifier:
+            delta = QPointF(delta.x(), 0) if abs(delta.x()) >= abs(delta.y()) else QPointF(0, delta.y())
         transform = QTransform.fromTranslate(delta.x(), delta.y())
-        if delta.manhattanLength() < .01:
+        if delta.manhattanLength() < .01 and not self.drag_moved:
             return
         if self.drag_handle:
             bounds = self.drag_bounds
-            modifiers = event.modifiers() if hasattr(event, "modifiers") else Qt.KeyboardModifier.NoModifier
             transform = QTransform()
             if self.drag_handle == "rotate":
                 center = bounds.center()
@@ -528,8 +558,12 @@ class DesignCanvas(QWidget):
             self.update()
             return
         if self.drag_start is not None and self.drag_before is not None:
-            if self.owner._snapshot() != self.drag_before:
+            if self.drag_toggle_selection is not None and not self.drag_moved and event is not None:
+                self.owner.select_many(self.owner.selected_indices() -
+                    expand_selection(self.owner.items, [self.drag_toggle_selection]))
+            elif self.owner._snapshot() != self.drag_before:
                 self.owner.push_undo(self.drag_before)
+        self.drag_toggle_selection = None
         self.drag_start = None
         self.drag_index = -1
         self.drag_before = None
@@ -558,6 +592,7 @@ class DesignCanvas(QWidget):
         elif event.key() == Qt.Key.Key_Escape and self.drag_before is not None:
             self.owner._restore(self.drag_before)
             self.drag_before = self.drag_start = self.drag_handle = self.drag_bounds = None
+            self.drag_toggle_selection = None
             self.drag_index = -1
             event.accept()
         elif event.key() == Qt.Key.Key_Space:
@@ -1536,6 +1571,7 @@ class VeronaWindow(QMainWindow):
         for label, shortcut, callback in (
             (tr("開啟設計…"), "Ctrl+O", self.open_design),
             (tr("儲存設計…"), "Ctrl+S", self.save_design),
+            (tr("另存設計…"), "Ctrl+Shift+S", lambda: self.save_design(save_as=True)),
             (tr("匯入 SVG…"), "Ctrl+I", self.import_svg),
             (tr("匯入圖片…"), "Ctrl+Shift+I", self.import_image),
             (tr("匯入 PDF／SVG 圖稿…"), "", self.import_document_artwork),
@@ -1568,14 +1604,14 @@ class VeronaWindow(QMainWindow):
                                      self.tab_bar.setCurrentIndex((self._active_document + delta) % len(self._documents)))
             file_menu.addAction(action)
         edit_menu = self.menuBar().addMenu(tr("編輯"))
-        duplicate_action = QAction(tr("複製物件"), self)
-        duplicate_action.setShortcut("Ctrl+D")
-        duplicate_action.triggered.connect(self.duplicate_selected)
-        edit_menu.addAction(duplicate_action)
-        delete_action = QAction(tr("刪除物件"), self)
-        delete_action.setShortcut("Delete")
-        delete_action.triggered.connect(self.delete_selected)
-        edit_menu.addAction(delete_action)
+        self.duplicate_action = QAction(tr("複製物件"), self)
+        self.duplicate_action.setShortcut("Ctrl+D")
+        self.duplicate_action.triggered.connect(self.duplicate_selected)
+        edit_menu.addAction(self.duplicate_action)
+        self.delete_action = QAction(tr("刪除物件"), self)
+        self.delete_action.setShortcut("Delete")
+        self.delete_action.triggered.connect(self.delete_selected)
+        edit_menu.addAction(self.delete_action)
         edit_menu.addAction(self.undo_action)
         edit_menu.addAction(self.redo_action)
         self.group_action = QAction(tr("群組"), self)
@@ -1609,12 +1645,12 @@ class VeronaWindow(QMainWindow):
         self.path_order_action.setChecked(self.metadata.get("optimize_paths", False))
         self.path_order_action.triggered.connect(self.set_path_order)
         edit_menu.addAction(self.path_order_action)
-        select_all = QAction(tr("全選物件"), self.canvas)
-        select_all.setShortcut("Ctrl+A")
-        select_all.setShortcutContext(Qt.ShortcutContext.WidgetShortcut)
-        select_all.triggered.connect(lambda: self.select_many(range(len(self.items))))
-        self.canvas.addAction(select_all)
-        edit_menu.addAction(select_all)
+        self.select_all_action = QAction(tr("全選物件"), self.canvas)
+        self.select_all_action.setShortcut("Ctrl+A")
+        self.select_all_action.setShortcutContext(Qt.ShortcutContext.WidgetShortcut)
+        self.select_all_action.triggered.connect(lambda: self.select_many(range(len(self.items))))
+        self.canvas.addAction(self.select_all_action)
+        edit_menu.addAction(self.select_all_action)
         appearance_menu = self.menuBar().addMenu(tr("外觀"))
         theme_group = QActionGroup(self)
         theme_group.setExclusive(True)
@@ -1637,6 +1673,43 @@ class VeronaWindow(QMainWindow):
             group.addAction(action)
             language_menu.addAction(action)
             action.triggered.connect(lambda _checked=False, value=code: self._change_language(value))
+        self.refresh_properties()
+
+    def canvas_context_menu(self) -> QMenu:
+        menu = QMenu(self.canvas)
+        for action in (self.undo_action, self.redo_action):
+            menu.addAction(action)
+        menu.addSeparator()
+        for action in (self.duplicate_action, self.delete_action):
+            menu.addAction(action)
+        menu.addSeparator()
+        menu.addAction(self.group_action)
+        menu.addAction(self.ungroup_action)
+        for label, buttons in (
+                ("排列順序", (self.layer_panel.up, self.layer_panel.down)),
+                ("對齊與均分", self.alignment_buttons.values()),
+                ("變形", self.selection_edit_buttons[1:])):
+            submenu = menu.addMenu(tr(label))
+            for button in buttons:
+                action = QAction(button.text(), submenu)
+                action.triggered.connect(button.click)
+                submenu.addAction(action)
+                action.setEnabled(button.isEnabled())
+                action.setToolTip(button.toolTip())
+            submenu.setEnabled(any(action.isEnabled() for action in submenu.actions()))
+        menu.addSeparator()
+        indices = self.selected_indices()
+        for key, value, label in (
+                ("locked", not self._selection_blocked(), "解除鎖定" if self._selection_blocked() else "鎖定"),
+                ("visible", not any(self.items[i].get("visible", True) for i in indices),
+                 "隱藏" if any(self.items[i].get("visible", True) for i in indices) else "顯示")):
+            action = menu.addAction(tr(label))
+            action.setEnabled(bool(indices))
+            action.triggered.connect(lambda _checked=False, k=key, v=value:
+                                     self.set_layer_property(self.selected_indices(), k, v))
+        menu.addSeparator()
+        menu.addAction(self.select_all_action)
+        return menu
 
     def _apply_theme(self, name: str) -> None:
         self.theme_name = name if name in THEMES else "light"
@@ -2092,6 +2165,9 @@ class VeronaWindow(QMainWindow):
         has_group = not blocked and any(self.items[i].get("group_path") for i in self.selected_indices())
         self.ungroup_button.setEnabled(has_group)
         if hasattr(self, "group_action"):
+            self.duplicate_action.setEnabled(count > 0 and not blocked)
+            self.delete_action.setEnabled(count > 0 and not blocked)
+            self.select_all_action.setEnabled(bool(self.items))
             self.group_action.setEnabled(unit_count >= 2)
             self.ungroup_action.setEnabled(has_group)
         self.object_name.setEnabled(enabled and not blocked)
@@ -2604,7 +2680,7 @@ class VeronaWindow(QMainWindow):
         if Path(filename).suffix.lower() == ".lds":
             from .lds import load_lds
             native = load_lds(filename)
-            return native.items, self._cut_settings(), native.metadata
+            return native.items, native.settings or self._cut_settings(), native.metadata
         from .input_safety import read_design
         data = read_design(filename)
         items, settings = self._validate_document(data)
@@ -2815,20 +2891,18 @@ class VeronaWindow(QMainWindow):
             safe.append(points)
         return safe
 
-    def save_design(self) -> bool:
-        filename = self.current_file
-        if filename and Path(filename).suffix.lower() == ".lds":
-            filename = None
+    def save_design(self, *, save_as=False) -> bool:
+        filename = None if save_as else self.current_file
         if not filename:
-            default_name = (Path(self.current_file).with_suffix(".jdesign").name
-                            if self.current_file and Path(self.current_file).suffix.lower() == ".lds"
-                            else "design.jdesign")
-            filename, _ = QFileDialog.getSaveFileName(self, tr("儲存設計"), default_name,
-                                                       tr("Verona 設計 (*.jdesign)"))
+            default_name = self.current_file or "design.jdesign"
+            native_filter = tr("LDS 設計（原廠相容性未驗證） (*.lds)")
+            filename, selected_filter = QFileDialog.getSaveFileName(self, tr("儲存設計"), default_name,
+                tr("Verona 設計 (*.jdesign)") + ";;" + native_filter,
+                selectedFilter=native_filter if Path(default_name).suffix.lower() == ".lds" else tr("Verona 設計 (*.jdesign)"))
+            if filename and Path(filename).suffix.lower() not in (".jdesign", ".json", ".lds"):
+                filename += ".lds" if selected_filter == native_filter else ".jdesign"
         if not filename:
             return False
-        if not filename.endswith((".jdesign", ".json")):
-            filename += ".jdesign"
         try:
             self._write_document(filename)
             return True
@@ -2843,16 +2917,20 @@ class VeronaWindow(QMainWindow):
             data["metadata"] = self.metadata
         # Serialize before touching the target, then replace it in one step so a
         # failed save never leaves a truncated design behind.
-        text = json.dumps(data, ensure_ascii=False, indent=2)
         target = Path(filename)
+        if target.suffix.lower() == ".lds":
+            from .lds_export import encode_lds
+            payload = encode_lds(data)
+        else:
+            payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
         if not overwrite:
-            with target.open("x", encoding="utf-8") as output:
-                output.write(text)
+            with target.open("xb") as output:
+                output.write(payload)
         else:
             handle, temporary = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
             try:
-                with os.fdopen(handle, "w", encoding="utf-8") as output:
-                    output.write(text)
+                with os.fdopen(handle, "wb") as output:
+                    output.write(payload)
                 if target.exists():
                     mode = target.stat().st_mode & 0o777
                 else:
@@ -2860,6 +2938,20 @@ class VeronaWindow(QMainWindow):
                     os.umask(umask)
                     mode = 0o666 & ~umask
                 os.chmod(temporary, mode)
+                if target.suffix.lower() == ".lds" and target.exists():
+                    backup = target.with_name(target.name + ".bak")
+                    try:
+                        backup_output = backup.open("xb")
+                    except FileExistsError:
+                        pass
+                    else:
+                        try:
+                            with backup_output, target.open("rb") as original:
+                                os.chmod(backup, mode)
+                                shutil.copyfileobj(original, backup_output)
+                        except BaseException:
+                            backup.unlink(missing_ok=True)
+                            raise
                 os.replace(temporary, target)
             except BaseException:
                 Path(temporary).unlink(missing_ok=True)
@@ -2868,6 +2960,8 @@ class VeronaWindow(QMainWindow):
         self.file_label.setText(Path(filename).name)
         self.saved_snapshot = self._document_state()
         self._refresh_tab_titles()
+        if target.suffix.lower() == ".lds":
+            self.status_label.setText(tr("已儲存 {name} · 原廠 LDS 相容性尚未驗證", name=target.name))
 
     def _document_state(self) -> dict[str, Any]:
         return {"items": _copy_items(self.items), "settings": self._cut_settings(),

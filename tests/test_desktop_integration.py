@@ -109,7 +109,7 @@ class LdsThumbnailTests(unittest.TestCase):
 
 
 class DesktopIntegrationTests(unittest.TestCase):
-    def test_installer_registers_lds_only_in_user_data_directories(self):
+    def test_installer_registers_jdesign_and_lds_only_in_user_data_directories(self):
         with tempfile.TemporaryDirectory() as folder:
             data_home = Path(folder)/"data"
             with patch.dict(os.environ, {"XDG_DATA_HOME": str(data_home)}), \
@@ -120,19 +120,23 @@ class DesktopIntegrationTests(unittest.TestCase):
                 entry = applications/f"verona-{language}.desktop"
                 text = entry.read_text()
                 self.assertIn(f"Exec={desktop_integration._exec_argument(sys.executable)} -m verona.desktop_integration --launch {argument} %f\n", text)
-                self.assertIn(f"MimeType={desktop_integration.LDS_MIME};\n", text)
+                self.assertIn(f"MimeType={desktop_integration.DESIGN_MIME};{desktop_integration.LDS_MIME};\n", text)
             self.assertIn('<glob pattern="*.lds"/>', (data_home/"mime/packages/verona.xml").read_text())
+            self.assertIn('<glob pattern="*.jdesign"/>', (data_home/"mime/packages/verona.xml").read_text())
             self.assertIn("-m verona.thumbnailer %i %o %s", (data_home/"thumbnailers/verona-lds.thumbnailer").read_text())
             self.assertEqual([call.args[0] for call in run.call_args_list], [
                 ["update-mime-database", str(data_home/"mime")],
                 ["update-desktop-database", str(applications)],
+                ["xdg-mime", "default", "verona-en.desktop", desktop_integration.DESIGN_MIME],
                 ["xdg-mime", "default", "verona-en.desktop", desktop_integration.LDS_MIME]])
 
     def test_installed_launcher_preserves_filename_and_opens_without_a_file(self):
-        filename = "中文 空格 $(not-a-command).lds"
         with patch("verona.ui.main", return_value=0) as launch:
-            self.assertEqual(desktop_integration.main(["--launch", "en", filename]), 0)
-            launch.assert_called_once_with(["--lang", "en", "--open", filename])
+            for suffix in (".lds", ".jdesign"):
+                filename = "中文 空格 $(not-a-command)" + suffix
+                self.assertEqual(desktop_integration.main(["--launch", "en", filename]), 0)
+                launch.assert_called_once_with(["--lang", "en", "--open", filename])
+                launch.reset_mock()
             launch.reset_mock()
             self.assertEqual(desktop_integration.main(["--launch", "zh_TW"]), 0)
             launch.assert_called_once_with(["--lang", "zh_TW"])
