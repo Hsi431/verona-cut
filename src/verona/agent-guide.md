@@ -222,7 +222,7 @@ for fallback fonts or missing characters. Created objects are cut outlines;
 they do not become printed artwork merely by being created.
 
 verona_configure_document previews saved cut settings (custom, force, speed,
-tool) and registration settings (enabled, paper_width, paper_height, margins,
+tool, passes) and registration settings (enabled, paper_width, paper_height, margins,
 mark_stroke, mark_short_length, offset). Margins are [left,top,right,bottom] in
 mm and include half the mark stroke beyond the recorded printer hard margins.
 The current workspace supports paper dimensions up to 300 mm per axis.
@@ -397,9 +397,12 @@ for the intended output path; file writes cannot be undone through editor undo.
 ## Machine operations are separate
 
 The existing verona_prepare_job reads a saved jdesign and snapshots its PLT.
-Check the exact tool, force, speed, contours, bounds, registration, SHA-256 and
+Check the exact tool, force, speed, passes, contours, bounds, registration, SHA-256 and
 source before using verona_send_job. Material-specific force/speed are machine
 command values, not grams or mm/s. Do not invent settings for an unknown material.
+passes is an integer from 1 through 10, defaults to the saved value (or 1),
+and can be overridden during preparation. Each contour repeats before the next;
+registration runs once. Returned contour/point counts describe source geometry.
 
 Only send with current user authorization and the intended paper, mat and tool
 loaded. machine_ready is an operator assertion, not a sensor or interlock.

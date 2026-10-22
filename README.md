@@ -34,6 +34,7 @@ No storefront, online asset library or background cloud synchronization.
 - Print & Cut registration marks, measured alignment correction, direct printing and PDF export.
 - Local `.jdesign` files, PLT export, `.lds` thumbnails and desktop file associations.
 - Wi-Fi version checks and bounded cut jobs; CLI dry runs without any device connection.
+- 1–10 cutting passes per contour, with one Print & Cut registration scan per job.
 
 **Status: alpha.** Juliet Wi-Fi cutting and Print & Cut have been used on real
 hardware. USB-B delivery is experimental. Romeo has not been tested and is not
@@ -105,6 +106,9 @@ export VERONA_HOST
 # Read-only version query. No head movement or cut job.
 verona-cut status --host "$VERONA_HOST"
 
+# Read additional identity fields, omitting per-device identifiers.
+verona-cut status --host "$VERONA_HOST" --details
+
 # Validate and export a small pen job. No connection to any hardware.
 verona-cut cut examples/pen-calibration.jdesign --dry-run --output preview.plt
 
@@ -117,6 +121,14 @@ files, never arbitrary PLT commands. `--force 1..160`, `--speed 1..13` and
 `--tool pen|blade` override job settings; these are machine setting values,
 not material recommendations. Omitting force/speed preserves saved settings
 or the machine's settings. Read the dry-run summary before sending.
+
+`--passes 1..10` overrides the saved pass count (older designs default to 1).
+Each contour is repeated before the next, with a raised return to its start.
+The GUI exposes **Cut passes** independently of force/speed overrides and
+includes the count in the send confirmation. Saving retains it in both design
+formats in Verona; other LDS readers may ignore this setting.
+See [Wi-Fi diagnostics](docs/WIFI_DIAGNOSTICS.md) for identity-query
+details and the current camera/firmware boundaries.
 
 All job paths are checked against the work area and, when enabled, the
 registration frame. Failed transfers are never automatically replayed.

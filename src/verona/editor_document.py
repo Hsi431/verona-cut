@@ -149,8 +149,8 @@ def build_document_edit(items, metadata, settings, selection, action, parameters
         if not parameters or set(parameters) - {"registration", "cut_settings"}:
             raise ValueError("Choose registration and/or cut_settings.")
         cut = parameters.get("cut_settings", {})
-        if not isinstance(cut, dict) or set(cut) - {"custom", "force", "speed", "tool"}:
-            raise ValueError("Only custom, force, speed and tool are editable cut settings.")
+        if not isinstance(cut, dict) or set(cut) - {"custom", "force", "speed", "tool", "passes"}:
+            raise ValueError("Only custom, force, speed, tool and passes are editable cut settings.")
         settings.update(cut)
         if "registration" in parameters:
             changes = parameters["registration"]

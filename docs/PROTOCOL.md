@@ -10,6 +10,10 @@ machines may behave differently. Romeo compatibility has not been tested.
 - No account, internet service, broadcast discovery or login handshake.
 - Read-only version request: ASCII `;RSVER;`. Expected reply: `SVER=<version>;`.
 - A version reply is not an idle/ready signal and does not confirm mat loading.
+- `;RINFO;` returns semicolon-separated identity fields ending in `OK=RINFO;`
+  on the tested SS12 / V22.0613 device. `verona-cut status --details` reads it
+  with a 4096-byte limit and omits per-device identifiers. See
+  [Wi-Fi diagnostics](WIFI_DIAGNOSTICS.md) for fields and limits.
 
 Jobs are raw ASCII PLT bytes. Each write is at most 1024 bytes, followed by a
 0.3-second pacing delay. Short writes continue from the accepted offset on
@@ -52,6 +56,11 @@ IN;FSIZE600,1000;U SP2;!FS1;VS1;U200,200 D200,1000 D600,1000 D600,200 D200,200 U
 
 Ordinary jobs finish with a raised move to protocol `(0,0)`. The physical
 origin depends on the machine's loading/setup state; validate it with a pen.
+
+Cut passes are a host-side setting from 1 through 10 (default 1). Each
+contour's raised start and tool-down trace are repeated consecutively inside
+one job. Initialization, registration and finalization are not replayed per
+pass. A transfer failure still never triggers automatic job replay.
 
 ## Print & Cut
 

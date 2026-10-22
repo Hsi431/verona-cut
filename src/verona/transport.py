@@ -97,6 +97,52 @@ def query_tcp_version(host, port=TCP_PORT, timeout=2.0):
     return text[5:-1]
 
 
+def query_tcp_info(host, port=TCP_PORT, timeout=2.0):
+    """Read RINFO identity fields, omitting per-device identifiers."""
+    address = _ipv4_endpoint(host, port)
+    deadline = time.monotonic() + timeout
+    with socket.create_connection((address, port), timeout=timeout) as connection:
+        connection.sendall(b";RINFO;")
+        response = bytearray()
+        while len(response) < 4096:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Juliet information query timed out.")
+            connection.settimeout(remaining)
+            chunk = connection.recv(4096 - len(response))
+            if not chunk:
+                break
+            response.extend(chunk)
+            if response.endswith(b"OK=RINFO;"):
+                break
+    fields = {}
+    if not response.endswith(b";OK=RINFO;"):
+        raise ValueError("Incomplete or unsupported Juliet information reply.")
+    for record in bytes(response[:-1]).split(b";"):
+        key, separator, value = record.partition(b"=")
+        if (not separator or not key.isalpha() or not key.isupper() or key in fields
+                or len(value) > 128):
+            raise ValueError("Invalid Juliet information reply.")
+        fields[bytes(key)] = bytes(value)
+    if not {b"SVER", b"HVER", b"MODE"} <= fields.keys():
+        raise ValueError("Missing Juliet identity fields.")
+    names = {"SVER": "software_version", "HVER": "hardware_version", "MODE": "model",
+             "BSVER": "bs_version", "MDATE": "date_code", "PGHEAD": "program_header"}
+    identity = {}
+    for key, name in names.items():
+        if key.encode() in fields:
+            try:
+                value = fields[key.encode()].decode("ascii", errors="strict")
+            except UnicodeDecodeError as error:
+                raise ValueError("Invalid Juliet identity field.") from error
+            if not value or not value.isprintable():
+                raise ValueError("Invalid Juliet identity field.")
+            identity[name] = value
+    return {"identity": identity,
+            "identifier_fields_omitted": sorted(key.decode("ascii") for key in fields
+                                                if key.decode("ascii") not in {*names, "OK"})}
+
+
 def usb_devices():
     """Enumerate devices matching the supported cutter VID/PID."""
     import usb.core

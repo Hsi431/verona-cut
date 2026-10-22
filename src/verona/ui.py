@@ -1228,6 +1228,11 @@ class VeronaWindow(QMainWindow):
         self.tool_combo.addItem(tr("刀具"), 0)
         self.tool_combo.addItem(tr("記號筆"), 1)
         settings.addRow(tr("工具"), self.tool_combo)
+        self.passes_spin = SafeSpinBox()
+        self.passes_spin.setRange(1, 10)
+        self.passes_spin.setValue(1)
+        self.passes_spin.setToolTip(tr("每條輪廓連續切割指定次數；Print & Cut 只定位一次。"))
+        settings.addRow(tr("切割次數"), self.passes_spin)
         cut_layout.addLayout(settings)
         self.custom_settings = QCheckBox(tr("指定速度與壓力"))
         self.custom_settings.toggled.connect(self._toggle_cut_settings)
@@ -1457,6 +1462,7 @@ class VeronaWindow(QMainWindow):
         tool = tr("刀具") if job["tool"] == 0 else tr("記號筆")
         settings = (tr("速度 {speed} / 壓力 {force}", speed=job["speed"], force=job["force"])
                     if job["force"] is not None else tr("沿用機器目前的速度與壓力"))
+        settings += tr(" · 每條輪廓 {passes} 次", passes=job["passes"])
         path_lines = [
             tr("• {name}：X {x}, Y {y} mm；{width} × {height} mm", name=_display_name(item['name']),
                x=f"{rect.left():.2f}", y=f"{rect.top():.2f}", width=f"{rect.width():.2f}", height=f"{rect.height():.2f}")
@@ -1789,6 +1795,7 @@ class VeronaWindow(QMainWindow):
             "custom": self.custom_settings.isChecked(),
             "speed": self.speed_spin.value(),
             "force": self.force_spin.value(),
+            "passes": self.passes_spin.value(),
             "tool": int(self.tool_combo.currentData()),
             "connection": self.connection_mode.currentData(),
             "host": host,
@@ -2149,6 +2156,7 @@ class VeronaWindow(QMainWindow):
         self.custom_settings.setChecked(settings["custom"])
         self.speed_spin.setValue(settings["speed"])
         self.force_spin.setValue(settings["force"])
+        self.passes_spin.setValue(settings.get("passes", 1))
         self.tool_combo.setCurrentIndex(self.tool_combo.findData(settings["tool"]))
         self.connection_mode.setCurrentIndex(self.connection_mode.findData(settings["connection"]))
         self.wifi_host.setText(settings["host"])
@@ -2819,7 +2827,7 @@ class VeronaWindow(QMainWindow):
                 raise ValueError("Saved tracing state requires an image object.")
             items.append(safe_item)
 
-        defaults = {"custom": False, "speed": 5, "force": 10, "tool": 0,
+        defaults = {"custom": False, "speed": 5, "force": 10, "tool": 0, "passes": 1,
                     "connection": "wifi", "host": "", "port": TCP_PORT}
         raw_settings = data.get("settings", {})
         if not isinstance(raw_settings, dict):
@@ -2838,6 +2846,7 @@ class VeronaWindow(QMainWindow):
         if (type(settings["custom"]) is not bool
                 or type(settings["speed"]) is not int or not 1 <= settings["speed"] <= 13
                 or type(settings["force"]) is not int or not 1 <= settings["force"] <= 160
+                or type(settings["passes"]) is not int or not 1 <= settings["passes"] <= 10
                 or type(settings["tool"]) is not int or settings["tool"] not in (0, 1)
                 or settings["connection"] not in ("wifi", "usb")
                 or type(settings["port"]) is not int or not 1 <= settings["port"] <= 65535):

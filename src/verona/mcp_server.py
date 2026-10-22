@@ -49,7 +49,7 @@ class VeronaController:
                  "vendor_id": device.idVendor, "product_id": device.idProduct}
                 for device in transport.usb_devices()]
 
-    def prepare_job(self, design_path, force=None, speed=None, tool=None):
+    def prepare_job(self, design_path, force=None, speed=None, tool=None, passes=None):
         # Reuse the editor's full document validation without creating a window.
         from .ui import VeronaWindow
         path = Path(design_path).expanduser().resolve()
@@ -57,7 +57,8 @@ class VeronaController:
         data = read_design(path)
         items, settings = VeronaWindow._validate_document(data)
         metadata = data.get("metadata", {})
-        payload, job = commands.encode_document_job(items, metadata, settings, force=force, speed=speed, tool=tool)
+        payload, job = commands.encode_document_job(items, metadata, settings,
+            force=force, speed=speed, tool=tool, passes=passes)
         contours = job["contours"]
         bounds = job["registration_bounds"]
         registration = metadata.get("print_cut", {})
@@ -71,6 +72,7 @@ class VeronaController:
                 "design_bounds_mm": [min(p[0] for p in points), min(p[1] for p in points),
                                      max(p[0] for p in points), max(p[1] for p in points)],
                 "force": job["force"], "speed": job["speed"], "tool": "blade" if job["tool"] == 0 else "pen",
+                "passes": job["passes"],
                 "path_order_enabled": metadata.get("optimize_paths", False),
                 "print_cut": bool(bounds), "registration_bounds_mm": bounds,
                 "registration_offset_mm": list(job["registration_offset"]),
@@ -253,7 +255,7 @@ def create_server(controller):
         [left,top,right,bottom] (mm), mark_stroke (0.5–1.5 mm),
         mark_short_length (4–12.5 mm), offset [x,y] (-5–5 mm), printer_name
         (installed queue; fits reported hard margins unless margins are explicit).
-        cut_settings: custom bool, force int1–160, speed int1–13, tool int0/1.
+        cut_settings: custom bool, force int1–160, speed int1–13, tool int0/1, passes int1–10.
         Reports requires_reprint for changes to printed marks or paper.
         Existing artwork keeps its size/position; out-of-bounds cuts stay blocked.
         """
@@ -520,13 +522,14 @@ def create_server(controller):
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=False))
     def verona_prepare_job(design_path: str, force: StrictInt | None = None,
-                           speed: StrictInt | None = None, tool: StrictInt | None = None) -> dict[str, Any]:
+                           speed: StrictInt | None = None, tool: StrictInt | None = None,
+                           passes: StrictInt | None = None) -> dict[str, Any]:
         """Validate a saved jdesign and snapshot its encoded job; does not contact the cutter.
 
         Review bounds, tool, force/speed, registration and SHA before sending.
         None retains saved settings; saved custom=false retains machine force/speed.
         """
-        return invoke(controller.prepare_job, design_path, force, speed, tool)
+        return invoke(controller.prepare_job, design_path, force, speed, tool, passes)
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True,
                                             idempotentHint=False))

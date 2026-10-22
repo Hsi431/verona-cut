@@ -28,7 +28,7 @@ def registration_point_error(x, y, bounds, offset=(0, 0)):
     return None
 
 
-def encode_plt(contours, *, force=None, speed=None, tool=0, registration_bounds=None,
+def encode_plt(contours, *, force=None, speed=None, tool=0, passes=1, registration_bounds=None,
                registration_offset=(0, 0)):
     """Encode ordinary cuts or a bounded Print & Cut registration job.
 
@@ -39,6 +39,8 @@ def encode_plt(contours, *, force=None, speed=None, tool=0, registration_bounds=
     """
     if type(tool) is not int or tool not in (0, 1):
         raise ValueError(tr("工具必須是刀片 (0) 或畫筆 (1)"))
+    if type(passes) is not int or not 1 <= passes <= 10:
+        raise ValueError(tr("切割次數必須是介於 1–10 的整數"))
     for label, value, upper in (("壓力", force, 160), ("速度", speed, 13)):
         if value is not None and (type(value) is not int or not 1 <= value <= upper):
             raise ValueError(tr("{label}必須介於 1–{upper}", label=tr(label), upper=upper))
@@ -114,8 +116,9 @@ def encode_plt(contours, *, force=None, speed=None, tool=0, registration_bounds=
     if speed is not None:
         output.append(f"VS{speed};")
     for points in paths:
-        output.append(f"U{points[0][0]},{points[0][1]} ")
-        output.extend(f"D{feed},{cross} " for feed, cross in points[1:])
+        path = f"U{points[0][0]},{points[0][1]} " + "".join(
+            f"D{feed},{cross} " for feed, cross in points[1:])
+        output.extend([path] * passes)
     # Registered jobs return using the maximum encoded feed coordinate.
     end_feed = max(feed for path in paths for feed, cross in path) if registration_bounds is not None else 0
     output.append(f"U{end_feed},0 U !PG;")
@@ -125,12 +128,12 @@ def encode_plt(contours, *, force=None, speed=None, tool=0, registration_bounds=
     return "".join(output).encode("ascii")
 
 
-def encode_document(items, metadata, settings, *, force=None, speed=None, tool=None):
+def encode_document(items, metadata, settings, *, force=None, speed=None, tool=None, passes=None):
     """Shared GUI/MCP job encoding with the saved optional path-order policy."""
-    return encode_document_job(items, metadata, settings, force=force, speed=speed, tool=tool)[0]
+    return encode_document_job(items, metadata, settings, force=force, speed=speed, tool=tool, passes=passes)[0]
 
 
-def encode_document_job(items, metadata, settings, *, force=None, speed=None, tool=None):
+def encode_document_job(items, metadata, settings, *, force=None, speed=None, tool=None, passes=None):
     """Return payload and the exact contours/parameters used to encode it."""
     from .path_order import cut_contours
     registration = metadata.get("print_cut", {})
@@ -140,6 +143,7 @@ def encode_document_job(items, metadata, settings, *, force=None, speed=None, to
     contours = cut_contours(items, metadata)
     parameters = {"force": force if force is not None else settings["force"] if settings["custom"] else None,
         "speed": speed if speed is not None else settings["speed"] if settings["custom"] else None,
+        "passes": settings.get("passes", 1) if passes is None else passes,
         "tool": settings["tool"] if tool is None else tool, "registration_bounds": bounds,
         "registration_offset": registration.get("offset", (0, 0)) if bounds else (0, 0)}
     return encode_plt(contours, **parameters), {"contours": contours, **parameters}

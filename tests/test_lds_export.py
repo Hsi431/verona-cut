@@ -31,7 +31,7 @@ from verona.nodes import edit_path
 
 def design(items, metadata=None):
     return {"format": "verona", "version": 1, "units": "mm", "items": items,
-            "settings": {"custom": True, "speed": 5, "force": 10, "tool": 1,
+            "settings": {"custom": True, "speed": 5, "force": 10, "tool": 1, "passes": 1,
                          "connection": "wifi", "host": "", "port": 8080},
             "metadata": metadata or {}}
 
@@ -95,6 +95,7 @@ class LdsExportTests(unittest.TestCase):
         data = design(items, {"print_cut":{"enabled":True,"paper_width":210.,"paper_height":297.,
                                             "bounds":[6.,6.,204.,291.],"offset":[.1,-.1]},
                               "optimize_paths":True})
+        data["settings"]["passes"] = 3
         original = copy.deepcopy(data)
         payload = lds_export.encode_lds(data)
         loaded = load_lds(self.save_archive(payload))

@@ -1,6 +1,10 @@
 """English strings keyed by the Traditional Chinese UI source text."""
 
 ENGLISH = {
+    "切割次數": "Cut passes",
+    "切割次數必須是介於 1–10 的整數": "Cut passes must be an integer from 1 to 10",
+    "每條輪廓連續切割指定次數；Print & Cut 只定位一次。": "Repeat each contour before moving to the next. Print & Cut registration runs once.",
+    " · 每條輪廓 {passes} 次": " · {passes} pass(es) per contour",
     "圖層": "Layers",
     "請先解鎖圖層再編輯。": "Unlock this layer before editing.",
     "物件": "Object",
