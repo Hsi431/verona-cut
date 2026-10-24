@@ -33,11 +33,16 @@ def validate_path(path):
 
 
 def editable_path(item, index):
+    return copy.deepcopy(_current_path(item, index))
+
+
+def _current_path(item, index):
+    """The saved or implied node path, shared with item; callers must not modify it."""
     if type(index) is not int or not 0 <= index < len(item["contours"]):
         raise ValueError("Choose a current contour index.")
     saved = item.get("node_paths", {}).get(str(index))
     if saved is not None:
-        return copy.deepcopy(saved)
+        return saved
     contour = item["contours"][index]
     closed = len(contour) > 2 and contour[0] == contour[-1]
     return {"closed": closed, "nodes": [{"point": p, "in": None, "out": None}
@@ -88,11 +93,19 @@ def flatten_path(path):
 def edit_path(item, index, path):
     if item.get("registration_guide"):
         raise ValueError("Registration guides cannot be node edited.")
-    original = editable_path(item, index)
+    original = _current_path(item, index)
     safe = validate_path(path)
+    # Point lists are never edited in place, so untouched contours are shared;
+    # deep-copying every point made each node drag linear in the item size.
+    shared = ("contours", "image_clip", "node_paths")
+    result = copy.deepcopy({key: value for key, value in item.items() if key not in shared})
+    result["contours"] = list(item["contours"])
+    if "image_clip" in item:
+        result["image_clip"] = item["image_clip"]
+    if "node_paths" in item:
+        result["node_paths"] = dict(item["node_paths"])
     if safe == original:
-        return copy.deepcopy(item)
-    result = copy.deepcopy(item)
+        return result
     result["contours"][index] = flatten_path(safe)
     result.setdefault("node_paths", {})[str(index)] = safe
     return result

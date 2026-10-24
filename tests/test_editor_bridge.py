@@ -73,6 +73,32 @@ class EditorBridgeTests(unittest.TestCase):
         self.assertNotIn("image_data", state["objects"][0])
         self.assertEqual(state["effective_cutting_frame_mm"], [10, 10, 90, 90])
 
+    def test_discovery_reads_a_summary_without_object_geometry(self):
+        with patch.object(self.bridge, "_objects", side_effect=AssertionError("objects read")):
+            editors = self.run_client(list_editors, directory=self.directory)
+        self.assertEqual(editors, [{"editor_id": self.bridge.editor_id, "file": None, "dirty": True,
+                                    "active_tab": 0, "revision": self.bridge.revision()}])
+
+    def test_revision_digests_geometry_without_serializing_every_point(self):
+        from verona import editor_bridge
+        documents = []
+        dumps = editor_bridge.json.dumps
+
+        def capture(value, **options):
+            documents.append(value)
+            return dumps(value, **options)
+
+        with patch.object(editor_bridge.json, "dumps", side_effect=capture):
+            revision = self.bridge.revision()
+        items = documents[-1]["document"]["items"]
+        self.assertTrue(all(isinstance(item["contours"], str) for item in items))
+        self.assertIsInstance(items[0]["image_clip"], str)
+        self.assertEqual(self.bridge.revision(), revision)
+        x, y = self.window.items[1]["contours"][0][2]
+        self.window.items[1]["contours"] = copy.deepcopy(self.window.items[1]["contours"])
+        self.window.items[1]["contours"][0][2] = (x + 1e-9, y)
+        self.assertNotEqual(self.bridge.revision(), revision)
+
     def test_configuration_preview_uses_new_frame_and_applies_as_one_undo(self):
         self.window.select(0)
         original = self.window._document_state()

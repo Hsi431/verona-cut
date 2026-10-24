@@ -14,7 +14,7 @@ from PySide6.QtGui import QKeyEvent, QMouseEvent
 from PySide6.QtWidgets import QApplication, QFileDialog
 
 from verona.i18n import set_language
-from verona.ui import VeronaWindow, _item_path
+from verona.ui import PAGE_MARGIN, VeronaWindow, _item_path
 
 
 class TransformHandleTests(unittest.TestCase):
@@ -60,6 +60,57 @@ class TransformHandleTests(unittest.TestCase):
         self._send_mouse(QMouseEvent.Type.MouseButtonRelease, end,
                          button=Qt.MouseButton.LeftButton, buttons=Qt.MouseButton.NoButton,
                          modifiers=modifiers)
+
+    def test_apply_size_keeps_untouched_geometry_including_negative_and_unrounded(self):
+        self.window.items = [self._item("off page", -5, -3, 20, 10),
+                             self._item("fine", 12.345, 40.006, 30.1234, 51)]
+        self.window.refresh_all()
+        for index in range(2):
+            self.window.select(index)
+            original = copy.deepcopy(self.window.items[index]["contours"])
+            undo_steps = len(self.window.undo_stack)
+            self.window.object_name.setText(f"renamed {index}")
+            self.window.apply_size()
+            self.assertEqual(self.window.items[index]["contours"], original)
+            self.assertEqual(self.window.items[index]["name"], f"renamed {index}")
+            self.assertEqual(len(self.window.undo_stack), undo_steps + 1)
+        self.window.select(0)
+        self.assertEqual((self.window.x_spin.value(), self.window.y_spin.value()), (-5, -3))
+        self.window.x_spin.setValue(-2)
+        self.window.apply_size()
+        self.assertEqual(_item_path(self.window.items[0]).boundingRect().getCoords(), (-2, -3, 23, 10))
+
+    def test_apply_size_uses_qt_rounding_when_fields_are_unchanged(self):
+        self.window.items = [self._item("rounded", 12.125, -5.125, 32.25, 15.25)]
+        self.window.refresh_all()
+        self.window.select(0)
+        original = copy.deepcopy(self.window.items[0]["contours"])
+        self.assertEqual(self.window.x_spin.value(), 12.13)
+        self.assertEqual(self.window.y_spin.value(), -5.13)
+        self.window.apply_size()
+        self.assertEqual(self.window.items[0]["contours"], original)
+
+    def test_drag_maps_cached_paths_instead_of_rebuilding_them(self):
+        from verona import ui
+        self.window.items = [self._item("big", 10, 10, 60, 40)]
+        self.window.items[0]["contours"][0] = [(10 + x / 10, 10) for x in range(500)] + [(60, 40), (10, 10)]
+        self.window.refresh_all()
+        self.window.select(0)
+        canvas = self.window.canvas
+        start = QPointF(PAGE_MARGIN + 30 * canvas.zoom, PAGE_MARGIN + 10 * canvas.zoom)
+        canvas.mousePressEvent(QMouseEvent(QMouseEvent.Type.MouseButtonPress, start, start,
+                               Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier))
+        self.assertIsNotNone(canvas.drag_before)
+        canvas.grab()
+        with patch("verona.ui._path_from_contours", wraps=ui._path_from_contours) as build:
+            for step in (1, 2, 3):
+                point = start + QPointF(step * 2.5 * canvas.zoom, step * canvas.zoom)
+                canvas.mouseMoveEvent(QMouseEvent(QMouseEvent.Type.MouseMove, point, point, Qt.MouseButton.NoButton,
+                                      Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier))
+                canvas.grab()
+        self.assertEqual(build.call_count, 0)
+        moved = canvas.item_path(self.window.items[0])
+        self.assertEqual(moved, ui._path_from_contours(self.window.items[0]["contours"]))
 
     def test_zoom_scale_anchor_ratio_undo_and_escape_cancel(self):
         self.window.change_zoom(100)

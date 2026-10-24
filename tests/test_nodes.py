@@ -36,6 +36,33 @@ class NodeTests(unittest.TestCase):
         QSettings.setPath(QSettings.Format.NativeFormat, QSettings.Scope.UserScope, cls.folder.name)
         cls.app = QApplication.instance() or QApplication([])
 
+    def test_node_drag_reuses_untouched_contours_and_their_display_paths(self):
+        from verona import artwork
+        item = image_item(bleed={"width_mm": 1, "color": "#ffffff"})
+        item["contours"] = [[(x + 2*k, 20 + k) for x in range(20, 120)] for k in range(40)]
+        original = copy.deepcopy(item)
+        path = editable_path(item, 3)
+        move_node(path, 5, (30, 30))
+        changed = edit_path(item, 3, path)
+        self.assertEqual(item, original)
+        self.assertTrue(all(changed["contours"][k] is item["contours"][k] for k in range(40) if k != 3))
+        self.assertIsNot(changed["bleed"], item["bleed"])
+        self.assertEqual(changed["contours"][3][5], (30, 30))
+        dialog = NodeEditorDialog(item)
+        try:
+            dialog.canvas.resize(600, 400)
+            dialog.canvas.grab()
+            with patch("verona.artwork.contour_path", wraps=artwork.contour_path) as build:
+                move_node(dialog.path, 2, (25, 30))
+                dialog.changed()
+                dialog.canvas.grab()
+            # Only the edited contour is rebuilt for display (a first-show fit
+            # may still measure the whole item once).
+            rebuilt = [call for call in build.call_args_list if len(call.args[0]) == 1]
+            self.assertEqual(len(rebuilt), 1)
+        finally:
+            dialog.deleteLater()
+
     def test_cubic_flatten_split_and_move_keep_shape_and_handles(self):
         path = curved()
         before = flatten_path(path)

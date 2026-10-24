@@ -137,7 +137,10 @@ class EdgeBleedTests(unittest.TestCase):
                 moved = window.canvas.grab().toImage()
                 self.assertEqual(extension.call_count, 3)
                 self.assertEqual(moved.pixelColor(round(34+28.5*5), round(34+25.5*5)), QColor("green"))
+                # refresh_all keeps still-valid entries, so drop them to compare
+                # against a fresh computation.
                 window.refresh_all()
+                window.canvas._path_cache.clear()
                 with patch.dict("verona.edge_bleed._LAYERS", clear=True):
                     self.assertEqual(window.canvas.grab().toImage(), moved)
                 self.assertEqual(extension.call_count, 4)

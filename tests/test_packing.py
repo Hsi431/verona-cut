@@ -26,6 +26,20 @@ class PackingTests(unittest.TestCase):
         QSettings.setPath(QSettings.Format.NativeFormat, QSettings.Scope.UserScope, cls.settings.path())
         cls.app = QApplication.instance() or QApplication([])
 
+    def test_fill_does_not_spend_its_search_budget_retesting_rejected_positions(self):
+        pattern = rectangle(x=10, y=10, width=8, height=6)
+        grid = build_edit([pattern], {}, [0], "fill_area", {"gap_mm": 1})[2]["copies"]
+        for shape_aware in (False, True):
+            with self.subTest(shape_aware=shape_aware):
+                result, selection, details = pack_items([pattern], {}, [0], {
+                    "gap_mm": 1, "fill": True, "shape_aware": shape_aware})
+                # The same 300 mm frame holds 1000 grid copies (the copy limit).
+                self.assertEqual(len(selection), grid)
+                boxes = [item_bounds(result[index]) for index in selection]
+                for index, box in enumerate(boxes[:200]):
+                    for other in boxes[index+1:200]:
+                        self.assertFalse(box.adjusted(-.49, -.49, .49, .49).intersects(other))
+
     def test_whole_pattern_rotation_increases_count_without_resizing(self):
         items = [rectangle(width=40, height=60)]
         original = copy.deepcopy(items)

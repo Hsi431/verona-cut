@@ -432,6 +432,24 @@ class DesignUiTests(unittest.TestCase):
                 reopened.export_plt()
             self.assertEqual(plt.read_bytes(), expected)
 
+    def test_toolpath_preview_paints_prebuilt_paths_not_each_move(self):
+        from PySide6.QtGui import QImage
+        payload = commands.encode_plt([[(10, 10), (60, 10), (60, 40)], [(100, 100), (150, 100)]])
+        preview = PlotPreviewCanvas(payload)
+        preview.resize(preview.minimumSize())
+
+        class NotIterable(list):
+            def __iter__(self):
+                raise AssertionError("paint iterated every move")
+
+        preview.moves = NotIterable(preview.moves)
+        image = QImage(preview.size(), QImage.Format.Format_ARGB32)
+        preview.render(image)
+        zoom = preview.zoom
+        # Cuts are drawn in machine cross/feed axes: x = cross, y = feed.
+        down = image.pixelColor(round(34 + 25 * zoom), round(34 + 10 * zoom))
+        self.assertGreater(down.green() - down.red(), 40)
+
     def test_pen_calibration_design_exports_the_reference_golden_plt(self):
         design = ROOT / "examples" / "pen-calibration.jdesign"
         expected = (ROOT / "examples" / "pen-calibration.plt").read_bytes()
@@ -745,6 +763,42 @@ class DesignUiTests(unittest.TestCase):
                 preview_bottom_right = preview.mapTo(self.window, preview.rect().bottomRight())
                 self.assertLessEqual(preview_bottom_right.x(), self.window.width())
         self.window.hide()
+
+    def test_failed_new_file_save_leaves_no_partial_design(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "new.jdesign"
+            # Serializes, then fails while encoding the file contents.
+            self.window.metadata = {"note": "\ud800"}
+            with self.assertRaises(UnicodeEncodeError):
+                self.window._write_document(str(path), overwrite=False)
+            self.assertEqual(os.listdir(folder), [])
+            self.window.metadata = {}
+            self.window._write_document(str(path), overwrite=False)
+            self.assertEqual(json.loads(path.read_text())["format"], "verona")
+            umask = os.umask(0)
+            os.umask(umask)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o666 & ~umask)
+            with self.assertRaises(FileExistsError):
+                self.window._write_document(str(path), overwrite=False)
+            self.assertEqual(os.listdir(folder), ["new.jdesign"])
+            # Filesystems without hard links fall back to an exclusive copy.
+            copied = Path(folder) / "copied.jdesign"
+            with patch("verona.ui.os.link", side_effect=PermissionError):
+                self.window._write_document(str(copied), overwrite=False)
+            self.assertEqual(copied.read_text(), path.read_text())
+            self.assertEqual(sorted(os.listdir(folder)), ["copied.jdesign", "new.jdesign"])
+
+            def interrupted_copy(source, output):
+                output.write(b"partial")
+                raise OSError("disk full")
+
+            before = (self.window.current_file, self.window.saved_snapshot)
+            with patch("verona.ui.os.link", side_effect=PermissionError), \
+                    patch("verona.ui.shutil.copyfileobj", side_effect=interrupted_copy):
+                with self.assertRaisesRegex(OSError, "disk full"):
+                    self.window._write_document(str(Path(folder) / "failed.jdesign"), overwrite=False)
+            self.assertEqual(sorted(os.listdir(folder)), ["copied.jdesign", "new.jdesign"])
+            self.assertEqual((self.window.current_file, self.window.saved_snapshot), before)
 
     def test_failed_save_keeps_existing_design_file_and_mode(self):
         with tempfile.TemporaryDirectory() as folder:

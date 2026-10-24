@@ -3,10 +3,10 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import shutil
 import tempfile
 import uuid
 
+import numpy as np
 from PySide6.QtCore import QObject, QTimer
 from PySide6.QtNetwork import QLocalServer
 
@@ -95,9 +95,25 @@ class EditorBridge(QObject):
                                          ensure_ascii=False, allow_nan=False).encode()).hexdigest()
 
     def _digested(self, mapping):
-        """Shallow copy with embedded images and masks replaced by their digests."""
-        return {key: self._digest(value) if isinstance(value, str) and len(value) > 4096 else value
-                for key, value in mapping.items()}
+        """Shallow copy with embedded images, masks and point lists replaced by their digests."""
+        result = {}
+        for key, value in mapping.items():
+            if isinstance(value, str) and len(value) > 4096:
+                value = self._digest(value)
+            elif key in ("contours", "image_clip") and isinstance(value, list):
+                value = self._geometry_digest(value)
+            result[key] = value
+        return result
+
+    @staticmethod
+    def _geometry_digest(contours):
+        # Hashing packed doubles is several times faster than JSON for large
+        # traced documents and still changes with any coordinate.
+        parts = []
+        for contour in contours:
+            points = np.asarray(contour, dtype=np.float64)
+            parts += (len(points).to_bytes(8, "little"), points.tobytes())
+        return "sha256:" + hashlib.sha256(b"".join(parts)).hexdigest()
 
     def _digest(self, text):
         # Strings are immutable, so a digest stays valid while the same object is alive.
@@ -181,6 +197,12 @@ class EditorBridge(QObject):
                                  "ungroup", "align", "link_cut", "add_shape", "add_text", "configure", "import_artwork",
                                  "retrace_image", "edit_path", "vector_print", "fill_area", "pack_objects", "path_order", "bleed"],
                 "hardware_operations": False}
+
+    def summary(self):
+        """Discovery fields only; no per-object bounds or geometry."""
+        window = self.window
+        return {"editor_id": self.editor_id, "file": window.current_file, "dirty": window.is_dirty(),
+                "active_tab": window._active_document, "revision": self.revision()}
 
     def preview(self, expected_revision, action, object_indices, parameters):
         self._guard(expected_revision)
@@ -319,15 +341,15 @@ class EditorBridge(QObject):
             if overwrite:
                 os.replace(temporary, destination)
             else:
-                with destination.open("xb") as output, temporary.open("rb") as source:
-                    shutil.copyfileobj(source, output)
+                from .ui import publish_new_file
+                publish_new_file(temporary, destination)
         finally:
             temporary.unlink(missing_ok=True)
         return {"path": str(destination), "revision": self.revision(),
                 "printed": False, "hardware_operations": False}
 
     def dispatch(self, command, **arguments):
-        handlers = {"state": self.state, "preview": self.preview, "apply": self.apply,
+        handlers = {"state": self.state, "summary": self.summary, "preview": self.preview, "apply": self.apply,
                     "select": self.select, "history": self.history, "image": self.image,
                     "open_document": self.open_document, "save_document": self.save_document,
                     "export_pdf": self.export_pdf, "printers": self.printers}

@@ -56,8 +56,8 @@ def list_editors(*, directory=None):
         if not _EDITOR_ID.fullmatch(path.stem):
             continue
         try:
-            state = editor_request(path.stem, "state", directory=directory, timeout=5)
-            result.append({key: state[key] for key in
+            summary = editor_request(path.stem, "summary", directory=directory, timeout=5)
+            result.append({key: summary[key] for key in
                            ("editor_id", "file", "dirty", "active_tab", "revision")})
         except (OSError, ValueError, RuntimeError):
             continue

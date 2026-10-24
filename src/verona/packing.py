@@ -1,14 +1,16 @@
 """Bounded mixed-unit packing with exact footprint collision checks."""
 import time
 
-from PySide6.QtCore import QPointF, QRectF, Qt
+import numpy as np
+
+from PySide6.QtCore import QPointF
 from PySide6.QtGui import QPainterPath, QPainterPathStroker, QPolygonF, QTransform
 
 from .artwork import bleed_path, contour_path, image_path, item_bounds, vector_print_path
 from .editor_actions import cutting_frame, editable_indices, finite_number
 from .grouping import remap_group_ids, selection_units
 from .i18n import tr
-from .raster_import import _without_holes
+from .raster_import import _offset_path, _without_holes
 from .layers import cuttable, printable
 
 
@@ -42,11 +44,21 @@ def _footprint(items, shape_aware):
 def _buffer(path, gap):
     if not gap or path.isEmpty():
         return path
-    stroke = QPainterPathStroker()
-    stroke.setWidth(gap)
-    stroke.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-    stroke.setCapStyle(Qt.PenCapStyle.RoundCap)
-    return path.united(stroke.createStroke(path))
+    return _offset_path(path, gap / 2)
+
+
+def _anchor_values(path, sampled):
+    """Edges, and for shapes sampled outline points, that later positions may abut."""
+    box = path.boundingRect()
+    xs, ys = [], []
+    if sampled:
+        step = max(1, path.elementCount()//32)
+        for index in range(0, path.elementCount(), step):
+            point = path.elementAt(index)
+            xs.append(point.x)
+            ys.append(point.y)
+    return (np.array([box.right(), *xs]), np.array([box.left(), *xs]),
+            np.array([box.bottom(), *ys]), np.array([box.top(), *ys]))
 
 
 def _intersects(first, second):
@@ -81,10 +93,6 @@ def pack_items(items, metadata, indices, parameters):
         raise ValueError(tr("本次排版最多 2000 個物件與 200 萬個切割點，請減少份數。"))
     shape_aware = parameters.get("shape_aware", False)
     occupied = []
-    for item in remaining:
-        if cuttable(item) or printable(item):
-            raw, _ = _footprint([item], shape_aware)
-            occupied.append((raw, _buffer(raw, gap)))
     marks = QPainterPath()
     registration = metadata.get("print_cut", {})
     if registration.get("enabled"):
@@ -94,6 +102,7 @@ def pack_items(items, metadata, indices, parameters):
             marks.addPolygon(QPolygonF([QPointF(*point) for point in polygon]))
             marks.closeSubpath()
     protected_marks = _buffer(marks, gap)
+    mark_anchors = _anchor_values(marks, True)
     patterns = []
     for unit in units:
         raw, printed = _footprint([items[i] for i in unit], shape_aware)
@@ -117,6 +126,24 @@ def pack_items(items, metadata, indices, parameters):
     deadline = time.monotonic()+12
     placements = []
 
+    # Obstacles only accumulate, so a position rejected once stays rejected;
+    # remember it instead of spending the search budget on it again.
+    rejected = {}
+    anchors = []
+    boxes = np.empty((0, 4))
+
+    def add_obstacle(raw, collision):
+        nonlocal boxes
+        occupied.append((raw, collision))
+        box = collision.boundingRect()
+        boxes = np.vstack((boxes, (box.left(), box.top(), box.right(), box.bottom())))
+        anchors.append(_anchor_values(raw, shape_aware))
+
+    for item in remaining:
+        if cuttable(item) or printable(item):
+            raw, _ = _footprint([item], shape_aware)
+            add_obstacle(raw, _buffer(raw, gap))
+
     def find_place(unit_id):
         nonlocal trials, limited
         choices = []
@@ -124,22 +151,13 @@ def pack_items(items, metadata, indices, parameters):
             width, height = variant["width"], variant["height"]
             if width > area.width() or height > area.height():
                 continue
-            xs, ys = {area.left(), area.right()-width}, {area.top(), area.bottom()-height}
-            anchors = [raw for raw, _ in occupied]
-            if not variant["printed"].isEmpty() and not marks.isEmpty():
-                anchors.append(marks)
-            for path in anchors:
-                box = path.boundingRect()
-                xs.update((box.right()+gap, box.left()-width-gap))
-                ys.update((box.bottom()+gap, box.top()-height-gap))
-                if shape_aware or path is marks:
-                    step = max(1, path.elementCount()//32)
-                    for index in range(0, path.elementCount(), step):
-                        point = path.elementAt(index)
-                        xs.update((point.x+gap, point.x-width-gap))
-                        ys.update((point.y+gap, point.y-height-gap))
-            xs = sorted(x for x in xs if area.left() <= x <= area.right()-width)
-            ys = sorted(y for y in ys if area.top() <= y <= area.bottom()-height)
+            sources = anchors + [mark_anchors] if not variant["printed"].isEmpty() and not marks.isEmpty() else anchors
+            after_x, before_x, after_y, before_y = (
+                np.concatenate([source[i] for source in sources] or [np.empty(0)]) for i in range(4))
+            xs = np.unique(np.concatenate(((area.left(), area.right()-width), after_x+gap, before_x-width-gap)))
+            ys = np.unique(np.concatenate(((area.top(), area.bottom()-height), after_y+gap, before_y-height-gap)))
+            xs = xs[(xs >= area.left()) & (xs <= area.right()-width)].tolist()
+            ys = ys[(ys >= area.top()) & (ys <= area.bottom()-height)].tolist()
             # Bound candidate sets without claiming exhaustive or optimal search.
             if len(xs) > 256:
                 xs = [xs[i*(len(xs)-1)//255] for i in range(256)]
@@ -148,17 +166,28 @@ def pack_items(items, metadata, indices, parameters):
                 ys = [ys[i*(len(ys)-1)//255] for i in range(256)]
                 limited = True
             found = None
+            seen = rejected.setdefault(id(variant), set())
+            reach = variant["collision"].boundingRect()
             for y in ys:
                 for x in xs:
+                    if (x, y) in seen:
+                        continue
                     if trials >= 20000 or time.monotonic() > deadline:
                         limited = True
                         return min(choices, key=lambda value: (value[1], value[0], value[2]["angle"])) if choices else None
                     trials += 1
+                    # Inclusive box overlap is a superset of _intersects; only
+                    # those obstacles need the exact path test.
+                    near = np.flatnonzero((boxes[:, 0] <= x+reach.right()) & (boxes[:, 2] >= x+reach.left())
+                                          & (boxes[:, 1] <= y+reach.bottom()) & (boxes[:, 3] >= y+reach.top()))
                     move = QTransform.fromTranslate(x, y)
-                    collision = move.map(variant["collision"])
-                    if any(_intersects(collision, obstacle) for _, obstacle in occupied):
-                        continue
+                    if len(near):
+                        collision = move.map(variant["collision"])
+                        if any(_intersects(collision, occupied[index][1]) for index in near):
+                            seen.add((x, y))
+                            continue
                     if not variant["printed"].isEmpty() and _intersects(move.map(variant["printed"]), protected_marks):
+                        seen.add((x, y))
                         continue
                     found = (x, y, variant)
                     break
@@ -180,7 +209,7 @@ def pack_items(items, metadata, indices, parameters):
             return False
         x, y, variant = position
         move = QTransform.fromTranslate(x, y)
-        occupied.append((move.map(variant["raw"]), move.map(variant["collision"])))
+        add_obstacle(move.map(variant["raw"]), move.map(variant["collision"]))
         placements.append((unit_id, x, y, variant))
         packed[unit_id] += 1
         points += point_counts[unit_id]

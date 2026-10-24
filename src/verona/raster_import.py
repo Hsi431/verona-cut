@@ -11,7 +11,7 @@ import numpy as np
 from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QRectF, QSize, Qt, QTimer
 from PySide6.QtGui import (
     QBitmap, QColor, QImage, QImageReader, QPainter, QPainterPath, QPainterPathStroker,
-    QPen, QPixmap, QRegion, QTransform,
+    QPen, QPixmap, QPolygonF, QRegion, QTransform,
 )
 from PySide6.QtWidgets import (
     QCheckBox, QColorDialog, QComboBox, QDialog, QDialogButtonBox, QFormLayout,
@@ -37,6 +37,7 @@ class ImageSizeSpinBox(SafeDoubleSpinBox):
 
 class MaskPreviewLabel(QLabel):
     paint_callback = None
+    release_callback = None
     last_point = None
 
     def mousePressEvent(self, event):
@@ -55,6 +56,8 @@ class MaskPreviewLabel(QLabel):
 
     def mouseReleaseEvent(self, event):
         self.last_point = None
+        if self.release_callback:
+            self.release_callback()
         super().mouseReleaseEvent(event)
 
 
@@ -215,12 +218,37 @@ def _simplify_path(path: QPainterPath, amount: int) -> QPainterPath:
     return result.simplified()
 
 
+def _stroke_region(path: QPainterPath, width: float) -> QPainterPath:
+    """Area within width/2 of the outline (round caps and joins).
+
+    One stroke of a traced, pixel-stepped outline overlaps itself at every
+    step, and resolving those crossings in a single boolean grows far faster
+    than linearly. Stroking short pieces and merging neighbours pairwise keeps
+    each boolean small; round caps make the merged pieces equal the whole stroke.
+    """
+    stroker = QPainterPathStroker()
+    stroker.setWidth(width)
+    stroker.setCapStyle(Qt.PenCapStyle.RoundCap)
+    stroker.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    pieces = []
+    for polygon in path.toSubpathPolygons():
+        points = list(polygon)
+        for start in range(0, max(1, len(points) - 1), 4):
+            piece = QPainterPath()
+            piece.addPolygon(QPolygonF(points[start:start + 5]))
+            pieces.append(stroker.createStroke(piece).simplified())
+    if not pieces:
+        return QPainterPath()
+    while len(pieces) > 1:
+        pieces = [pieces[i].united(pieces[i + 1]) if i + 1 < len(pieces) else pieces[i]
+                  for i in range(0, len(pieces), 2)]
+    return pieces[0]
+
+
 def _offset_path(path: QPainterPath, amount: float) -> QPainterPath:
     if abs(amount) < 1e-9:
         return path
-    stroker = QPainterPathStroker()
-    stroker.setWidth(abs(amount) * 2)
-    stroke = stroker.createStroke(path)
+    stroke = _stroke_region(path, abs(amount) * 2)
     return (path.united(stroke) if amount > 0 else path.subtracted(stroke)).simplified()
 
 
@@ -294,8 +322,12 @@ def raster_options(image, changes):
     return options
 
 
-def trace_paths(image, options, mask_override=None):
-    """Return the shared mask, print clip, cut path and bleed path."""
+RAW_TRACE_KEYS = ("mask_mode", "background", "tolerance", "inverted", "colors", "smoothing", "keep_holes")
+OFFSET_TRACE_KEYS = ("width_mm", "height_mm", "minimum_area_mm2", "offset_mm", "bleed_mm")
+
+
+def trace_raw(image, options, mask_override=None):
+    """Return the working mask and its outline in source pixels (RAW_TRACE_KEYS only)."""
     max_edge = 1200
     factor = min(1.0, max_edge / max(image.width(), image.height()))
     width = max(1, round(image.width() * factor))
@@ -310,6 +342,11 @@ def trace_paths(image, options, mask_override=None):
     path = _simplify_path(path, int(options["smoothing"]))
     if not options["keep_holes"]:
         path = _without_holes(path)
+    return mask, path
+
+
+def trace_offsets(image, options, path):
+    """Apply the mm-based filters and offsets (OFFSET_TRACE_KEYS) to a raw outline."""
     to_mm = QTransform.fromScale(options["width_mm"] / image.width(),
                                  options["height_mm"] / image.height())
     from_mm = QTransform.fromScale(image.width() / options["width_mm"],
@@ -326,8 +363,13 @@ def trace_paths(image, options, mask_override=None):
         path = path_mm * from_mm
     cut_path = _offset_path(path_mm, options["offset_mm"]) * from_mm
     bleed_path = _offset_path(path_mm, options["bleed_mm"]) * from_mm
-    result = mask, path, cut_path.simplified(), bleed_path.simplified()
-    return result
+    return path, cut_path.simplified(), bleed_path.simplified()
+
+
+def trace_paths(image, options, mask_override=None):
+    """Return the shared mask, print clip, cut path and bleed path."""
+    mask, path = trace_raw(image, options, mask_override)
+    return (mask, *trace_offsets(image, options, path))
 
 
 def build_raster_items(source_image, name, options, paths=None):
@@ -532,7 +574,8 @@ class ImportImageDialog(QDialog):
         self.keep_ratio_check.toggled.connect(self._ratio_toggled)
         self.mask_mode_combo.currentIndexChanged.connect(self._update_controls)
         self.mode_combo.currentIndexChanged.connect(self._update_controls)
-        for control in (self.mode_combo, self.invert_check, self.holes_check,
+        # mode_combo already refreshes the preview through _update_controls.
+        for control in (self.invert_check, self.holes_check,
                         self.smoothing_spin, self.offset_spin, self.clip_check,
                         self.opacity_slider, self.tolerance_spin, self.bleed_spin, self.minimum_area):
             signal = getattr(control, "currentIndexChanged", None) or getattr(control, "toggled", None)
@@ -638,9 +681,15 @@ class ImportImageDialog(QDialog):
     def _mask_and_paths(self, image: QImage | None = None):
         image = self.image if image is None else image
         options = self.trace_options()
-        key = (image.cacheKey(), tuple(options.items()))
+        # Size, offsets and bleed reuse the traced outline; mode, clip and
+        # colors affect neither stage.
+        raw_key = (image.cacheKey(), [options[key] for key in RAW_TRACE_KEYS])
+        if getattr(self, "_raw_cache", (None, None))[0] != raw_key:
+            self._raw_cache = raw_key, trace_raw(image, options)
+        key = (raw_key, [options[key] for key in OFFSET_TRACE_KEYS])
         if getattr(self, "_mask_cache", (None, None))[0] != key:
-            self._mask_cache = key, trace_paths(image, options)
+            mask, path = self._raw_cache[1]
+            self._mask_cache = key, (mask, *trace_offsets(image, options, path))
         return self._mask_cache[1]
 
     def update_preview(self, *_args) -> None:
@@ -659,28 +708,58 @@ class ImportImageDialog(QDialog):
         canvas = QImage(max_size, QImage.Format.Format_ARGB32_Premultiplied)
         canvas.fill(QColor("#edf0ee"))
         painter = QPainter(canvas)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        painter.translate((canvas.width()-view.width()*factor)/2-view.left()*factor,
-                          (canvas.height()-view.height()*factor)/2-view.top()*factor)
-        painter.scale(factor*sx, factor*sy)
-        self.preview_to_source, _ = painter.worldTransform().inverted()
-        if is_print and self.bleed_spin.value():
-            painter.fillPath(bleed_path, self.bleed_color)
-        painter.save()
-        if self.clip_check.isChecked() and is_print:
-            painter.setClipPath(raw_path)
-        painter.drawImage(0, 0, self.image)
-        painter.restore()
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            painter.translate((canvas.width()-view.width()*factor)/2-view.left()*factor,
+                              (canvas.height()-view.height()*factor)/2-view.top()*factor)
+            painter.scale(factor*sx, factor*sy)
+            self.preview_to_source, _ = painter.worldTransform().inverted()
+            if is_print and self.bleed_spin.value():
+                painter.fillPath(bleed_path, self.bleed_color)
+            painter.save()
+            if self.clip_check.isChecked() and is_print:
+                painter.setClipPath(raw_path)
+            painter.drawImage(0, 0, self.image)
+            painter.restore()
+        finally:
+            painter.end()
+        cut_layer = None
         if self.mode_combo.currentData() != "background":
-            painter.fillPath(raw_path, QColor(8, 126, 114, round(self.opacity_slider.value() * 2.55)))
-            pen = QPen(QColor("#d45c3d"), 1.5)
-            pen.setCosmetic(True)
-            painter.setPen(pen)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawPath(cut_path)
-        painter.end()
+            # Kept separately so a mask brush can redraw only its overlay.
+            cut_layer = QImage(canvas.size(), QImage.Format.Format_ARGB32_Premultiplied)
+            cut_layer.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(cut_layer)
+            try:
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                painter.setTransform(self.preview_to_source.inverted()[0])
+                pen = QPen(QColor("#d45c3d"), 1.5)
+                pen.setCosmetic(True)
+                painter.setPen(pen)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawPath(cut_path)
+            finally:
+                painter.end()
+        self.preview_layers = canvas, cut_layer, raw_path
+        self._show_preview_layers()
+
+    def _show_preview_layers(self) -> None:
+        canvas, cut_layer, raw_path = self.preview_layers
+        canvas = canvas.copy()
+        if cut_layer is not None:
+            painter = QPainter(canvas)
+            try:
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                painter.setTransform(self.preview_to_source.inverted()[0])
+                self._draw_mask_overlay(painter, raw_path, QColor(8, 126, 114, round(self.opacity_slider.value() * 2.55)))
+                painter.resetTransform()
+                painter.drawImage(0, 0, cut_layer)
+            finally:
+                painter.end()
         self.preview_label.setPixmap(QPixmap.fromImage(canvas))
+
+    def _draw_mask_overlay(self, painter: QPainter, raw_path: QPainterPath, color: QColor) -> None:
+        painter.fillPath(raw_path, color)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)

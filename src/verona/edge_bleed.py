@@ -35,13 +35,13 @@ def edge_bleed_image(item):
     return layer
 
 
-def moved_edge_layer(base, layer, item):
-    """Reuse a layer when the item is the base moved rigidly (translate/rotate/mirror).
+def rigid_move(base, item):
+    """Return the translate/rotate/mirror mapping base onto item, or None.
 
-    The bleed ring is an offset of the cut, so a rigid move maps the old layer
-    onto the new ring exactly; any other change returns None.
+    Bleed rings are offsets of the cut, so a rigid move maps geometry computed
+    for the base position onto the moved item exactly.
     """
-    if item["image_data"] is not base["image_data"] or item["bleed"]["width_mm"] != base["width"]:
+    if item["image_data"] is not base["image_data"]:
         return None
     tx, ty, a, b, c, d = base["transform"]
     inverse, invertible = QTransform(a, b, c, d, tx, ty).inverted()
@@ -59,7 +59,15 @@ def moved_edge_layer(base, layer, item):
             mapped = np.asarray(before, dtype=float) @ linear + (move.dx(), move.dy())
             if not np.allclose(mapped, np.asarray(after, dtype=float), rtol=0, atol=1e-6):
                 return None
-    return layer[0], layer[1] * move
+    return move
+
+
+def moved_edge_layer(base, layer, item):
+    """Reuse a layer when the item is the base moved rigidly; any other change returns None."""
+    if item["bleed"]["width_mm"] != base["width"]:
+        return None
+    move = rigid_move(base, item)
+    return None if move is None else (layer[0], layer[1] * move)
 
 
 def _edge_bleed_image(item):
@@ -110,11 +118,11 @@ def check_edge_bleed(item):
         edge_bleed_image(item)
 
 
-def draw_edge_bleed(painter, item, layer=None):
+def draw_edge_bleed(painter, item, layer=None, ring=None):
     image, transform = edge_bleed_image(item) if layer is None else layer
     painter.save()
     try:
-        painter.setClipPath(bleed_path(item), Qt.ClipOperation.IntersectClip)
+        painter.setClipPath(bleed_path(item) if ring is None else ring, Qt.ClipOperation.IntersectClip)
         painter.setTransform(transform, True)
         painter.drawImage(QPointF(0, 0), image)
     finally:

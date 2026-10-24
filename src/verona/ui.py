@@ -6,6 +6,7 @@ import copy
 import argparse
 import base64
 import binascii
+import errno
 import ipaddress
 import json
 import math
@@ -17,7 +18,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QEvent, QObject, QPointF, QRunnable, QRectF, Qt, QTemporaryDir, QThreadPool, QSettings, Signal, Slot
+from PySide6.QtCore import QEvent, QLineF, QObject, QPointF, QRunnable, QRectF, Qt, QTemporaryDir, QThreadPool, QSettings, Signal, Slot
 from PySide6.QtGui import (
     QAction, QActionGroup, QColor, QContextMenuEvent, QCursor, QFont, QImage, QPainter, QPainterPath, QPainterPathStroker, QPen, QPixmap,
     QTransform, QPalette,
@@ -124,6 +125,24 @@ def _transform_item(item: dict[str, Any], transform: QTransform,
                                    y_basis.y() - origin.y()]
 
 
+def publish_new_file(source, target) -> None:
+    """Give a fully written file a new name, never replacing or truncating one."""
+    try:
+        # A hard link appears complete and fails if the name already exists.
+        os.link(source, target)
+    except FileExistsError:
+        raise
+    except OSError:
+        # Some removable-media filesystems have no hard links.
+        with open(target, "xb") as output, open(source, "rb") as data:
+            try:
+                shutil.copyfileobj(data, output)
+            except BaseException:
+                output.close()
+                Path(target).unlink(missing_ok=True)
+                raise
+
+
 def _trust_key(item: Any):
     try:
         key = item["name"], len(item["contours"]), tuple(item["contours"][0][0])
@@ -195,14 +214,26 @@ class DesignCanvas(QWidget):
 
     def item_bleed_path(self, item: dict[str, Any], *, inner=False) -> QPainterPath:
         from .artwork import bleed_path, inner_bleed_path
+        from .edge_bleed import rigid_move
         contours = item["contours"]
-        settings = item["bleed"].get("inner_mm", 0) if inner else item["bleed"]["width_mm"]
+        width = item["bleed"].get("inner_mm", 0) if inner else item["bleed"]["width_mm"]
         key = (id(item), "inner_bleed" if inner else "bleed")
         cached = self._path_cache.get(key)
-        if cached is None or cached[0] is not contours or cached[1] != settings:
-            cached = (contours, settings, (inner_bleed_path if inner else bleed_path)(item))
-            self._path_cache[key] = cached
-        return cached[2]
+        if cached is not None and cached["contours"] is contours and cached["width"] == width:
+            return cached["path"]
+        # Dragging moves the item rigidly on every mouse event; map the ring
+        # computed at the base position instead of offsetting the cut again.
+        base = cached["base"] if cached is not None and cached["width"] == width else None
+        move = rigid_move(base, item) if base else None
+        if move is None:
+            base = {"contours": contours, "clip": item.get("image_clip") or [], "image_data": item["image_data"],
+                    "transform": tuple(item["image_transform"]),
+                    "path": (inner_bleed_path if inner else bleed_path)(item)}
+            path = base["path"]
+        else:
+            path = move.map(base["path"])
+        self._path_cache[key] = {"contours": contours, "width": width, "path": path, "base": base}
+        return path
 
     def item_edge_bleed(self, item):
         from .edge_bleed import edge_bleed_image, moved_edge_layer
@@ -233,6 +264,14 @@ class DesignCanvas(QWidget):
             old = self._path_cache.pop(old_key)
             used -= old["base"]["layer"][0].sizeInBytes()
         return layer
+
+    def _share_drag_paths(self) -> None:
+        """The drag-start copies have the live items' geometry; reuse their paths."""
+        for index in self.drag_before["selection"]:
+            item, source = self.owner.items[index], self.drag_before["items"][index]
+            for key in ("contours", "image_clip"):
+                if key in item:
+                    self._path_cache[(id(source), key)] = (source[key], self.item_path(item, key))
 
     def selection_handles(self) -> dict[str, QPointF]:
         if (self.owner._selection_blocked()
@@ -294,7 +333,7 @@ class DesignCanvas(QWidget):
             painter.setOpacity(self.owner.image_opacity.value() / 100)
             draw_printed_item(painter, item, image=_qoi_image(item["image_data"]),
                 clip_path=self.item_path(item, "image_clip") if item.get("image_clip") else None,
-                outer_path=self.item_bleed_path(item) if bleed.get("width_mm") and not edge else None,
+                outer_path=self.item_bleed_path(item) if bleed.get("width_mm") else None,
                 inner_path=self.item_bleed_path(item, inner=True) if bleed.get("inner_mm") else None,
                 bleed_layer=self.item_edge_bleed(item) if edge else None)
             painter.restore()
@@ -437,6 +476,7 @@ class DesignCanvas(QWidget):
             self.drag_index = self.owner.selected
             self.drag_start = point
             self.drag_before = self.owner._snapshot()
+            self._share_drag_paths()
             self.drag_duplicate = False
             self.drag_moved = False
             return
@@ -468,6 +508,7 @@ class DesignCanvas(QWidget):
             self.drag_index = hit
             self.drag_start = point
             self.drag_before = self.owner._snapshot()
+            self._share_drag_paths()
             self.drag_duplicate = bool(modifiers & Qt.KeyboardModifier.AltModifier)
             self.drag_moved = False
         self.update()
@@ -542,7 +583,14 @@ class DesignCanvas(QWidget):
             self.owner.select_many(range(len(self.owner.items) - len(indices), len(self.owner.items)))
         targets = sorted(self.owner.selected_indices())
         for target, source_index in zip(targets, indices):
-            _transform_item(self.owner.items[target], transform, self.drag_before["items"][source_index])
+            item, source = self.owner.items[target], self.drag_before["items"][source_index]
+            _transform_item(item, transform, source)
+            if not source.get("node_paths"):
+                # The new points are the affine image of the drag-start points;
+                # map that cached path instead of rebuilding it point by point.
+                for key in ("contours", "image_clip"):
+                    if key in item:
+                        self._path_cache[(id(item), key)] = (item[key], transform.map(self.item_path(source, key)))
         self.drag_moved = True
         self.geometryChanged.emit()
         self.update()
@@ -805,6 +853,13 @@ class PlotPreviewCanvas(QWidget):
         self.moves: list[tuple[str, QPointF]] = []
         for mode, feed, cross in re.findall(r"([UD])(\d+),(\d+)", text):
             self.moves.append((mode, QPointF(int(cross) / 40, int(feed) / 40)))
+        # Group segments by pen once; a QPen and drawLine call per move made
+        # every repaint (including scrolling) slow for large jobs.
+        self.lines = {"U": [], "D": []}
+        current = QPointF(0, 0)
+        for mode, point in self.moves:
+            self.lines[mode].append(QLineF(current, point))
+            current = point
         self.setMinimumSize(int(PAGE_WIDTH_MM * self.zoom + 68),
                             int(self.feed_max * self.zoom + 68))
 
@@ -824,13 +879,10 @@ class PlotPreviewCanvas(QWidget):
         for y in range(0, int(self.feed_max) + 1, 10):
             painter.drawLine(QPointF(0, y), QPointF(PAGE_WIDTH_MM, y))
 
-        current = QPointF(0, 0)
-        for mode, point in self.moves:
-            color = ACCENT if mode == "D" else QColor("#b87531")
-            style = Qt.PenStyle.SolidLine if mode == "D" else Qt.PenStyle.DashLine
-            painter.setPen(QPen(color, 0.85 if mode == "D" else 0.55, style))
-            painter.drawLine(current, point)
-            current = point
+        painter.setPen(QPen(QColor("#b87531"), 0.55, Qt.PenStyle.DashLine))
+        painter.drawLines(self.lines["U"])
+        painter.setPen(QPen(ACCENT, 0.85, Qt.PenStyle.SolidLine))
+        painter.drawLines(self.lines["D"])
         painter.restore()
 
 
@@ -859,8 +911,11 @@ class VeronaWindow(QMainWindow):
     def __init__(self, *, host=None, port=None) -> None:
         super().__init__()
         app = QApplication.instance()
-        app.setStyle("Fusion")
-        app.setFont(QFont("Noto Sans", 10))
+        # Application-wide style and font changes re-polish every open widget.
+        if app.style().name().lower() != "fusion":
+            app.setStyle("Fusion")
+        if app.font() != QFont("Noto Sans", 10):
+            app.setFont(QFont("Noto Sans", 10))
         self.setWindowTitle(tr("Verona"))
         self.resize(1280, 800)
         self.items: list[dict[str, Any]] = []
@@ -891,8 +946,16 @@ class VeronaWindow(QMainWindow):
         self._alt_mouse_grab = False
 
     def showEvent(self, event) -> None:
-        QApplication.instance().installEventFilter(self)
+        # Only X11 needs the application-wide Alt grab; every installed filter
+        # runs for every application event, so keep it to visible windows.
+        if QApplication.platformName() == "xcb":
+            QApplication.instance().installEventFilter(self)
         super().showEvent(event)
+
+    def hideEvent(self, event) -> None:
+        self._release_alt_grab()
+        QApplication.instance().removeEventFilter(self)
+        super().hideEvent(event)
 
     def _release_alt_grab(self) -> None:
         if QWidget.mouseGrabber() is self.canvas:
@@ -1122,9 +1185,9 @@ class VeronaWindow(QMainWindow):
         self.width_spin = self._mm_spin()
         self.height_spin = self._mm_spin()
         self.x_spin = self._mm_spin()
-        self.x_spin.setRange(0, PAGE_WIDTH_MM)
+        self.x_spin.setRange(-PAGE_WIDTH_MM, PAGE_WIDTH_MM * 2)
         self.y_spin = self._mm_spin()
-        self.y_spin.setRange(0, 99999)
+        self.y_spin.setRange(-PAGE_HEIGHT_MM, 99999)
         geometry.addRow(tr("X 起點"), self.x_spin)
         geometry.addRow(tr("Y 起點"), self.y_spin)
         geometry.addRow(tr("寬度"), self.width_spin)
@@ -1740,7 +1803,11 @@ class VeronaWindow(QMainWindow):
     def _apply_theme(self, name: str) -> None:
         self.theme_name = name if name in THEMES else "light"
         self.theme_colors = THEMES[self.theme_name]
-        QApplication.instance().setPalette(theme_palette(self.theme_colors))
+        palette = theme_palette(self.theme_colors)
+        # An application palette change re-polishes every widget in every
+        # window; opening another window with the same theme must not.
+        if QApplication.instance().palette() != palette:
+            QApplication.instance().setPalette(palette)
         self.setStyleSheet(theme_stylesheet(self.theme_colors))
         for value, action in getattr(self, "theme_actions", {}).items():
             action.setChecked(value == self.theme_name)
@@ -2229,8 +2296,8 @@ class VeronaWindow(QMainWindow):
             self.height_spin.setValue(max(0.1, bounds.height()))
             self.width_spin.blockSignals(False)
             self.height_spin.blockSignals(False)
-            self.x_spin.setValue(max(0, bounds.left()))
-            self.y_spin.setValue(max(0, bounds.top()))
+            self.x_spin.setValue(bounds.left())
+            self.y_spin.setValue(bounds.top())
         else:
             self.object_name.clear()
             self.width_spin.setValue(0.1)
@@ -2280,7 +2347,11 @@ class VeronaWindow(QMainWindow):
             self.path_order_action.blockSignals(True)
             self.path_order_action.setChecked(self.metadata.get("optimize_paths", False))
             self.path_order_action.blockSignals(False)
-        self.canvas._path_cache.clear()
+        # Entries validate themselves against the geometry objects they were
+        # built from; only drop those of objects no longer in the document.
+        live = {id(item) for item in self.items}
+        for key in [key for key in self.canvas._path_cache if key[0] not in live]:
+            del self.canvas._path_cache[key]
         self.canvas.update()
         self.refresh_properties()
         self._refresh_history_actions()
@@ -2545,6 +2616,12 @@ class VeronaWindow(QMainWindow):
             if dialog is not None:
                 dialog.deleteLater()
 
+    @staticmethod
+    def _requested(spin: QDoubleSpinBox, actual: float) -> float:
+        """The spin value, or the exact geometry when its rounded display was left unchanged."""
+        shown = spin.textFromValue(min(max(actual, spin.minimum()), spin.maximum()))
+        return actual if spin.textFromValue(spin.value()) == shown else spin.value()
+
     def apply_size(self) -> None:
         if self._selection_blocked():
             return
@@ -2555,15 +2632,17 @@ class VeronaWindow(QMainWindow):
         bounds = self.selection_bounds()
         if bounds.width() <= 0 or bounds.height() <= 0:
             return
-        sx = self.width_spin.value() / bounds.width()
-        sy = self.height_spin.value() / bounds.height()
-        left, top = self.x_spin.value(), self.y_spin.value()
-        transform = QTransform()
-        transform.translate(left, top)
-        transform.scale(sx, sy)
-        transform.translate(-bounds.left(), -bounds.top())
-        for index in indices:
-            _transform_item(self.items[index], transform)
+        sx = self._requested(self.width_spin, bounds.width()) / bounds.width()
+        sy = self._requested(self.height_spin, bounds.height()) / bounds.height()
+        left = self._requested(self.x_spin, bounds.left())
+        top = self._requested(self.y_spin, bounds.top())
+        if (sx, sy, left, top) != (1, 1, bounds.left(), bounds.top()):
+            transform = QTransform()
+            transform.translate(left, top)
+            transform.scale(sx, sy)
+            transform.translate(-bounds.left(), -bounds.top())
+            for index in indices:
+                _transform_item(self.items[index], transform)
         if len(indices) == 1:
             item = self.items[indices[0]]
             item["name"] = self.object_name.text() or item.get("name", "路徑")
@@ -2952,21 +3031,20 @@ class VeronaWindow(QMainWindow):
             payload = encode_lds(data)
         else:
             payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
-        if not overwrite:
-            with target.open("xb") as output:
+        if not overwrite and target.exists():
+            raise FileExistsError(errno.EEXIST, os.strerror(errno.EEXIST), str(target))
+        handle, temporary = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
+        try:
+            with os.fdopen(handle, "wb") as output:
                 output.write(payload)
-        else:
-            handle, temporary = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
-            try:
-                with os.fdopen(handle, "wb") as output:
-                    output.write(payload)
-                if target.exists():
-                    mode = target.stat().st_mode & 0o777
-                else:
-                    umask = os.umask(0)
-                    os.umask(umask)
-                    mode = 0o666 & ~umask
-                os.chmod(temporary, mode)
+            if overwrite and target.exists():
+                mode = target.stat().st_mode & 0o777
+            else:
+                umask = os.umask(0)
+                os.umask(umask)
+                mode = 0o666 & ~umask
+            os.chmod(temporary, mode)
+            if overwrite:
                 if target.suffix.lower() == ".lds" and target.exists():
                     backup = target.with_name(target.name + ".bak")
                     try:
@@ -2982,9 +3060,10 @@ class VeronaWindow(QMainWindow):
                             backup.unlink(missing_ok=True)
                             raise
                 os.replace(temporary, target)
-            except BaseException:
-                Path(temporary).unlink(missing_ok=True)
-                raise
+            else:
+                publish_new_file(temporary, target)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
         self.current_file = filename
         self.file_label.setText(Path(filename).name)
         self.saved_snapshot = self._document_state()

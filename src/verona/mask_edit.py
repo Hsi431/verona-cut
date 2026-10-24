@@ -3,7 +3,7 @@ import copy
 import math
 
 import numpy as np
-from PySide6.QtCore import QPointF, Qt
+from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath, QPen, QTransform
 from PySide6.QtWidgets import QCheckBox, QComboBox, QDialogButtonBox, QHBoxLayout, QLabel, QWidget
 
@@ -180,6 +180,7 @@ def retrace_item(item, changes, mask=None):
 
 class EditImageDialog(ImportImageDialog):
     """Reuse tracing controls while keeping the saved image's position and pixels."""
+    stroke_mask = None
     def __init__(self, item, parent=None):
         image = decode_embedded_image(item["image_data"])
         super().__init__(image, item["name"], parent)
@@ -236,6 +237,7 @@ class EditImageDialog(ImportImageDialog):
         row.addStretch(1)
         self.layout().insertLayout(1, row)
         self.preview_label.paint_callback = self._paint_preview
+        self.preview_label.release_callback = self._finish_stroke
         self.mask_mode_combo.currentIndexChanged.connect(self._mask_source_changed)
         self.update_preview()
 
@@ -261,17 +263,34 @@ class EditImageDialog(ImportImageDialog):
         transform = image_transform(self.editing_item)
         points = [point] if previous is None else [previous, point]
         world = [transform.map(self.preview_to_source.map(value-offset)) for value in points]
-        mask = self._mask_and_paths()[0]
-        self.manual_mask = paint_mask(self.editing_item, self.image, mask, [{
+        # Paint the binary mask only while dragging; tracing it into paths
+        # takes far longer than a mouse event, so it waits for the release.
+        mask = self.stroke_mask if self.stroke_mask is not None else self._mask_and_paths()[0]
+        self.stroke_mask = paint_mask(self.editing_item, self.image, mask, [{
             "mode": self.brush_mode.currentData(), "width_mm": self.brush_width.value(),
             "points_mm": [[value.x(), value.y()] for value in world]}])
+        self._show_preview_layers()
+        return True
+
+    def _finish_stroke(self):
+        if self.stroke_mask is None:
+            return
+        self.manual_mask, self.stroke_mask = self.stroke_mask, None
         self.manual_inverted = self.invert_check.isChecked()
         self.mask_mode_combo.blockSignals(True)
         self.mask_mode_combo.setCurrentIndex(self.mask_mode_combo.findData("saved"))
         self.mask_mode_combo.blockSignals(False)
         self.mask_serial += 1
         self._update_controls()
-        return True
+
+    def _draw_mask_overlay(self, painter, raw_path, color):
+        if self.stroke_mask is None:
+            return super()._draw_mask_overlay(painter, raw_path, color)
+        height, width = self.stroke_mask.shape
+        indices = np.ascontiguousarray(self.stroke_mask, dtype=np.uint8)
+        overlay = QImage(indices.data, width, height, width, QImage.Format.Format_Indexed8)
+        overlay.setColorTable([0, color.rgba()])
+        painter.drawImage(QRectF(0, 0, self.image.width(), self.image.height()), overlay)
 
     def _mask_and_paths(self, image=None):
         if not hasattr(self, "editing_item"):
@@ -295,6 +314,7 @@ class EditImageDialog(ImportImageDialog):
         return result
 
     def build_items(self):
+        self._finish_stroke()
         if self.trace_options() == self.initial_options and self.manual_mask is None:
             return [copy.deepcopy(self.editing_item)]
         changes = {key: self.trace_options()[key] for key in TRACE_KEYS}

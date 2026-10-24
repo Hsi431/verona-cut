@@ -133,6 +133,25 @@ class RasterImportTests(unittest.TestCase):
         painter.end()
         return image
 
+    def test_import_dialog_retraces_the_mask_only_for_mask_options(self):
+        dialog = ImportImageDialog(self._transparent_donut(), "donut")
+        reference = raster_import.build_raster_items(
+            dialog.image, "donut", {**dialog.trace_options(), "width_mm": 30, "height_mm": 30,
+                                    "offset_mm": .5, "bleed_mm": 1, "mode": "print_cut"})
+        with patch("verona.raster_import.trace_raw", wraps=raster_import.trace_raw) as raw:
+            dialog.width_spin.setValue(30)
+            dialog.offset_spin.setValue(.5)
+            dialog.bleed_spin.setValue(1)
+            dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("cut_only"))
+            dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("print_cut"))
+            dialog.clip_check.setChecked(False)
+            dialog.clip_check.setChecked(True)
+            self.assertEqual(raw.call_count, 0)
+            dialog.tolerance_spin.setValue(40)
+            self.assertEqual(raw.call_count, 1)
+            dialog.tolerance_spin.setValue(20)
+        self.assertEqual(dialog.build_items(), reference)
+
     def test_alpha_trace_preserves_hole_and_can_fill_it(self):
         dialog = ImportImageDialog(self._transparent_donut(), "donut")
         with_hole = dialog.build_items()[0]

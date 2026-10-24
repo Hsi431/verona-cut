@@ -1,12 +1,17 @@
 """Shared printed artwork geometry; bleed never changes cutting contours."""
+from collections import OrderedDict
 import math
 import re
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QPainterPath, QPainterPathStroker, QPen, QTransform
+from PySide6.QtGui import QColor, QPainterPath, QPen, QTransform
 
-from .raster_import import _offset_path, decode_embedded_image
+from .raster_import import _offset_path, _stroke_region, decode_embedded_image
 from .layers import printable
+
+
+_BLEED_PATHS = OrderedDict()
+_BLEED_PATH_LIMIT = 64
 
 
 def contour_path(contours):
@@ -55,12 +60,27 @@ def image_path(item):
     return QTransform(a, b, c, d, tx, ty).map(path)
 
 
+def _cached_bleed(kind, width, contours, build):
+    """Bleed rings depend only on the cut contours and width; share them across outputs."""
+    key = (kind, width, tuple(tuple(map(tuple, contour)) for contour in contours))
+    path = _BLEED_PATHS.get(key)
+    if path is None:
+        path = build(contour_path(contours))
+        _BLEED_PATHS[key] = path
+        while len(_BLEED_PATHS) > _BLEED_PATH_LIMIT:
+            _BLEED_PATHS.popitem(last=False)
+    else:
+        _BLEED_PATHS.move_to_end(key)
+    return QPainterPath(path)
+
+
 def bleed_path(item):
     bleed = item.get("bleed")
     if not bleed or not bleed["width_mm"]:
         return QPainterPath()
-    base = contour_path(item["contours"])
-    return _offset_path(base, bleed["width_mm"]).subtracted(base)
+    width = bleed["width_mm"]
+    return _cached_bleed("outer", width, item["contours"],
+                         lambda base: _offset_path(base, width).subtracted(base))
 
 
 def draw_bleed(painter, item):
@@ -76,8 +96,8 @@ def inner_bleed_path(item):
     width = item.get("bleed", {}).get("inner_mm", 0)
     if not width:
         return QPainterPath()
-    base = contour_path(item["contours"])
-    return base.subtracted(_offset_path(base, -width))
+    return _cached_bleed("inner", width, item["contours"],
+                         lambda base: base.subtracted(_offset_path(base, -width)))
 
 
 def draw_inner_bleed(painter, item):
@@ -99,7 +119,7 @@ def draw_printed_item(painter, item, *, image=None, clip_path=None, outer_path=N
         if bleed.get("width_mm"):
             if bleed.get("mode") == "edge":
                 from .edge_bleed import draw_edge_bleed
-                draw_edge_bleed(painter, item, bleed_layer)
+                draw_edge_bleed(painter, item, bleed_layer, outer_path)
             else:
                 painter.fillPath(outer_path if outer_path is not None else bleed_path(item), QColor(bleed["color"]))
         if item.get("image_clip"):
@@ -150,11 +170,7 @@ def vector_print_path(item):
     path = contour_path(item["contours"])
     result = path if style["fill"] else QPainterPath()
     if style["stroke"]:
-        stroker = QPainterPathStroker()
-        stroker.setWidth(style["width_mm"])
-        stroker.setCapStyle(Qt.PenCapStyle.RoundCap)
-        stroker.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-        result = result.united(stroker.createStroke(path))
+        result = result.united(_stroke_region(path, style["width_mm"]))
     return result
 
 

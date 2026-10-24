@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QPoint, QPointF, Qt, QSettings
+from PySide6.QtCore import QEvent, QPoint, QPointF, Qt, QSettings
 from PySide6.QtGui import QMouseEvent, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFileDialog
@@ -41,6 +41,38 @@ class EditorWorkflowTests(unittest.TestCase):
     def tearDown(self):
         with patch.object(self.window, "_confirm_unsaved_changes", return_value="discard"):
             self.window.close()
+
+    def test_application_event_filter_only_while_shown_on_x11(self):
+        calls = []
+        original = VeronaWindow.eventFilter
+
+        def spy(window, watched, event):
+            calls.append(window)
+            return original(window, watched, event)
+
+        def probe():
+            calls.clear()
+            QApplication.sendEvent(self.app, QEvent(QEvent.Type.User))
+            return self.window in calls
+
+        with patch.object(VeronaWindow, "eventFilter", spy):
+            self.window.show()
+            self.assertFalse(probe())
+            self.window.hide()
+            with patch.object(QApplication, "platformName", return_value="xcb"):
+                self.window.show()
+                self.assertTrue(probe())
+                self.window.hide()
+                self.assertFalse(probe())
+
+    def test_another_window_does_not_repolish_the_whole_application(self):
+        with patch.object(QApplication, "setStyle") as style, \
+                patch.object(QApplication, "setPalette") as palette, \
+                patch.object(QApplication, "setFont") as font:
+            other = VeronaWindow()
+        self.assertEqual((style.call_count, palette.call_count, font.call_count), (0, 0, 0))
+        self.assertEqual(other.theme_name, self.window.theme_name)
+        other.close()
 
     def test_new_tab_preserves_each_documents_state_and_close_cancel(self):
         self.window.add_rectangle()

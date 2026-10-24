@@ -2,7 +2,7 @@
 import copy
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QPainter, QPen, QTransform
+from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF, QTransform
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QFormLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget)
 
@@ -42,21 +42,34 @@ class NodeCanvas(QWidget):
         p = (point-self.origin)/self.scale
         return (p.x(), p.y())
 
+    def cached_path(self, contours, key=None):
+        """Display path for contour lists, reused while the same list objects are shown."""
+        from .artwork import contour_path
+        key = contours if key is None else key
+        cache = self.__dict__.setdefault("_paths", {})
+        cached = cache.get(id(key))
+        if cached is None or cached[0] is not key:
+            cached = cache[id(key)] = (key, contour_path(contours))
+        return cached[1]
+
     def paintEvent(self, _event):
         from .ui import PAPER, ACCENT, _qoi_image
-        from .artwork import contour_path
+        item = self.dialog.item
+        shown = {id(contour) for contour in item["contours"]} | {id(item.get("image_clip"))}
+        cache = self.__dict__.setdefault("_paths", {})
+        for key in [key for key in cache if key not in shown]:
+            del cache[key]
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.fillRect(self.rect(), PAPER)
         painter.save()
         painter.translate(self.origin)
         painter.scale(self.scale, self.scale)
-        item = self.dialog.item
         if "image_data" in item:
             painter.save()
             painter.setOpacity(.4)
             if item.get("image_clip"):
-                painter.setClipPath(contour_path(item["image_clip"]))
+                painter.setClipPath(self.cached_path(item["image_clip"]))
             tx, ty, a, b, c, d = item["image_transform"]
             painter.setTransform(QTransform(a, b, c, d, tx, ty), True)
             painter.drawImage(QPointF(0, 0), _qoi_image(item["image_data"]))
@@ -66,21 +79,29 @@ class NodeCanvas(QWidget):
             pen = QPen(ACCENT if i == self.dialog.contour_index else QColor("#aebbb4"), 2 if i == self.dialog.contour_index else 1)
             pen.setCosmetic(True)
             painter.setPen(pen)
-            painter.drawPath(contour_path([contour]))
+            painter.drawPath(self.cached_path([contour], contour))
         painter.restore()
-        for i, node in enumerate(self.dialog.path["nodes"]):
-            p = self.screen(node["point"])
-            if i == self.dialog.node_index:
-                for key in ("in", "out"):
-                    if node.get(key) is not None:
-                        target = self.screen(node[key])
-                        painter.setPen(QPen(ACCENT, 1, Qt.PenStyle.DashLine))
-                        painter.drawLine(p, target)
-                        painter.setBrush(PAPER)
-                        painter.drawEllipse(target, 5, 5)
-            painter.setPen(QPen(ACCENT, 1))
-            painter.setBrush(ACCENT if i == self.dialog.node_index else PAPER)
-            painter.drawEllipse(p, 5, 5)
+        # Traced contours can have thousands of nodes: draw every marker as
+        # one ringed point batch, then the selected node and its handles.
+        points = QPolygonF([self.screen(node["point"]) for node in self.dialog.path["nodes"]])
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, len(points) < 500)
+        for color, width in ((ACCENT, 11), (PAPER, 9)):
+            painter.setPen(QPen(color, width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            painter.drawPoints(points)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        node = self.dialog.path["nodes"][self.dialog.node_index]
+        p = self.screen(node["point"])
+        for key in ("in", "out"):
+            if node.get(key) is not None:
+                target = self.screen(node[key])
+                painter.setPen(QPen(ACCENT, 1, Qt.PenStyle.DashLine))
+                painter.drawLine(p, target)
+                painter.setPen(QPen(ACCENT, 1))
+                painter.setBrush(PAPER)
+                painter.drawEllipse(target, 5, 5)
+        painter.setPen(QPen(ACCENT, 1))
+        painter.setBrush(ACCENT)
+        painter.drawEllipse(p, 5, 5)
 
     def mousePressEvent(self, event):
         if event.button() != Qt.MouseButton.LeftButton:
