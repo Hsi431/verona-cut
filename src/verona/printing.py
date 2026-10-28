@@ -123,9 +123,8 @@ def write_print_pdf(filename, items, metadata, *, calibration=False):
         painter.end()
 
 
-def print_document(printer, items, metadata, *, calibration=False):
-    """Print one sheet at actual size using a printer approved in the print dialog."""
-    from PySide6.QtPrintSupport import QPrinter
+def validate_printer(printer, items, metadata, *, calibration=False):
+    """Check physical paper and hard margins without starting a print job."""
     size = print_page_size(items, metadata, calibration=calibration)
     if not printer.isValid():
         raise ValueError(tr("找不到印表機"))
@@ -143,6 +142,12 @@ def print_document(printer, items, metadata, *, calibration=False):
             or right + half > size.width() - margins.right() + .01
             or bottom + half > size.height() - margins.bottom() + .01):
         raise ValueError(tr("定位標記超出這台印表機的可列印範圍，請先依印表機邊界調整定位範圍。"))
+
+
+def print_document(printer, items, metadata, *, calibration=False):
+    """Print one sheet at actual size using a printer approved in the print dialog."""
+    from PySide6.QtPrintSupport import QPrinter
+    validate_printer(printer, items, metadata, calibration=calibration)
     # Keep document millimetres relative to the paper corner, not the hard margins.
     printer.setFullPage(True)
     painter = QPainter(printer)

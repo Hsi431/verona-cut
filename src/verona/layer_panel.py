@@ -1,7 +1,7 @@
 """Object layers in front-to-back order, using the editor's document and undo."""
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView, QFrame, QHeaderView, QHBoxLayout, QLabel, QPushButton,
+    QAbstractItemView, QFrame, QHeaderView, QHBoxLayout, QPushButton,
     QTreeWidget, QTreeWidgetItem, QVBoxLayout,
 )
 
@@ -20,7 +20,6 @@ class LayerPanel(QFrame):
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(6)
         heading = QHBoxLayout()
-        heading.addWidget(QLabel(tr("圖層"), objectName="title"))
         heading.addStretch()
         self.up = QPushButton(tr("上移"))
         self.down = QPushButton(tr("下移"))

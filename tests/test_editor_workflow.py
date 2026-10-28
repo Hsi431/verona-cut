@@ -12,7 +12,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, Qt, QSettings
-from PySide6.QtGui import QMouseEvent, QWheelEvent
+from PySide6.QtGui import QCloseEvent, QMouseEvent, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFileDialog
 
@@ -372,6 +372,80 @@ class EditorWorkflowTests(unittest.TestCase):
             self.assertEqual(self.window.items, first_items)
             self.assertEqual(self.window.metadata, {"doc": "first"})
             self.assertTrue(self.window.is_dirty())
+
+    def test_all_inspector_sections_collapse_and_keep_state_across_language_changes(self):
+        names = ("layer_section", "path_section", "transform_section", "alignment_section",
+                 "view_section", "cut_section", "mark_section", "connection_section")
+        for index, name in enumerate(names):
+            getattr(self.window, name).setExpanded(index % 2 == 1)
+        before = copy.deepcopy(self.window._document_state())
+        self.window._change_language("en")
+        for index, name in enumerate(names):
+            section = getattr(self.window, name)
+            self.assertEqual(section.isExpanded(), index % 2 == 1)
+            self.assertEqual(section._content.isHidden(), index % 2 == 0)
+        self.assertEqual(self.window._document_state(), before)
+
+
+    def test_window_discard_closes_dirty_tabs_without_restoring_or_saving_them(self):
+        self.window.add_rectangle()
+        self.window.current_file = "first.lds"
+        self.window.new_design()
+        self.window.add_ellipse()
+        self.window.current_file = "second.lds"
+        before = copy.deepcopy(self.window._snapshot())
+        event = QCloseEvent()
+        with patch.object(self.window, "_restore_tab_state", side_effect=AssertionError("Must not redraw discarded tabs")), \
+                patch.object(self.window, "_document_state", side_effect=AssertionError("Must not copy discarded artwork")), \
+                patch.object(self.window, "save_design") as save, \
+                patch.object(self.window, "_confirm_unsaved_changes", return_value="discard") as confirm:
+            self.window.closeEvent(event)
+        self.assertTrue(event.isAccepted())
+        self.assertEqual([call.args for call in confirm.call_args_list], [("first.lds",), ("second.lds",)])
+        save.assert_not_called()
+        self.assertEqual(self.window._snapshot(), before)
+
+    def test_window_close_cancel_preserves_both_dirty_tabs_and_active_document(self):
+        self.window.add_rectangle()
+        self.window.new_design()
+        self.window.add_ellipse()
+        before = copy.deepcopy(self.window._snapshot())
+        event = QCloseEvent()
+        with patch.object(self.window, "_confirm_unsaved_changes", side_effect=["discard", "cancel"]):
+            self.window.closeEvent(event)
+        self.assertFalse(event.isAccepted())
+        self.assertEqual(self.window.tab_bar.currentIndex(), 1)
+        self.assertEqual(self.window._snapshot(), before)
+        self.window.tab_bar.setCurrentIndex(0)
+        self.assertTrue(self.window.is_dirty())
+        self.assertFalse(self.window._closing)
+
+    def test_window_close_reentry_during_confirmation_is_ignored(self):
+        self.window.add_rectangle()
+        nested, outer = QCloseEvent(), QCloseEvent()
+
+        def confirm(_filename):
+            self.window.closeEvent(nested)
+            return "discard"
+
+        with patch.object(self.window, "_confirm_unsaved_changes", side_effect=confirm) as prompt:
+            self.window.closeEvent(outer)
+        prompt.assert_called_once()
+        self.assertFalse(nested.isAccepted())
+        self.assertTrue(outer.isAccepted())
+        self.assertFalse(self.window._closing)
+
+    def test_clean_window_closes_without_copying_or_restoring_tabs(self):
+        self.window.add_rectangle()
+        self.window.saved_snapshot = self.window._document_state()
+        self.window.new_design()
+        event = QCloseEvent()
+        with patch.object(self.window, "_restore_tab_state", side_effect=AssertionError("Must not restore clean tabs")), \
+                patch.object(self.window, "_document_state", side_effect=AssertionError("Must not copy clean artwork")), \
+                patch.object(self.window, "_confirm_unsaved_changes") as prompt:
+            self.window.closeEvent(event)
+        self.assertTrue(event.isAccepted())
+        prompt.assert_not_called()
 
 
 if __name__ == "__main__":

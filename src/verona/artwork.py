@@ -89,7 +89,7 @@ def draw_bleed(painter, item):
             from .edge_bleed import draw_edge_bleed
             draw_edge_bleed(painter, item)
         else:
-            painter.fillPath(bleed_path(item), QColor(item["bleed"]["color"]))
+            _draw_solid_band(painter, item)
 
 
 def inner_bleed_path(item):
@@ -102,7 +102,28 @@ def inner_bleed_path(item):
 
 def draw_inner_bleed(painter, item):
     if item.get("bleed", {}).get("inner_mm"):
-        painter.fillPath(inner_bleed_path(item), QColor(item["bleed"]["color"]))
+        _draw_solid_band(painter, item, inner=True)
+
+
+def _draw_solid_band(painter, item, *, inner=False):
+    """Clip a round stroke instead of resolving thousands of overlapping joins."""
+    width = item["bleed"]["inner_mm" if inner else "width_mm"]
+    base = contour_path(item["contours"])
+    clip = base
+    if not inner:
+        clip = QPainterPath()
+        clip.setFillRule(Qt.FillRule.OddEvenFill)
+        clip.addRect(base.controlPointRect().adjusted(-width, -width, width, width))
+        clip.addPath(base)
+    painter.save()
+    try:
+        painter.setClipPath(clip, Qt.ClipOperation.IntersectClip)
+        pen = QPen(QColor(item["bleed"]["color"]), width * 2)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.strokePath(base, pen)
+    finally:
+        painter.restore()
 
 
 def draw_printed_item(painter, item, *, image=None, clip_path=None, outer_path=None,
@@ -121,7 +142,10 @@ def draw_printed_item(painter, item, *, image=None, clip_path=None, outer_path=N
                 from .edge_bleed import draw_edge_bleed
                 draw_edge_bleed(painter, item, bleed_layer, outer_path)
             else:
-                painter.fillPath(outer_path if outer_path is not None else bleed_path(item), QColor(bleed["color"]))
+                if outer_path is not None:
+                    painter.fillPath(outer_path, QColor(bleed["color"]))
+                else:
+                    _draw_solid_band(painter, item)
         if item.get("image_clip"):
             painter.setClipPath(clip_path if clip_path is not None else contour_path(item["image_clip"]),
                                 Qt.ClipOperation.IntersectClip)
@@ -131,16 +155,20 @@ def draw_printed_item(painter, item, *, image=None, clip_path=None, outer_path=N
     finally:
         painter.restore()
     if bleed.get("inner_mm"):
-        painter.fillPath(inner_path if inner_path is not None else inner_bleed_path(item), QColor(bleed["color"]))
+        if inner_path is not None:
+            painter.fillPath(inner_path, QColor(bleed["color"]))
+        else:
+            _draw_solid_band(painter, item, inner=True)
 
 
 def item_bounds(item, *, printed=False):
     bounds = contour_path(item["contours"]).controlPointRect()
     if printed and printable(item) and "image_data" in item:
         printed_path = image_path(item)
-        if item.get("bleed", {}).get("width_mm"):
-            printed_path = printed_path.united(bleed_path(item))
         bounds = bounds.united(printed_path.controlPointRect())
+        width = item.get("bleed", {}).get("width_mm", 0)
+        if width:
+            bounds = bounds.united(contour_path(item["contours"]).controlPointRect().adjusted(-width, -width, width, width))
     elif printed and printable(item) and item.get("print_style"):
         bounds = bounds.united(vector_print_path(item).controlPointRect())
     return bounds

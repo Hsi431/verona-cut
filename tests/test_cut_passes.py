@@ -128,7 +128,7 @@ class CutPassUiTests(unittest.TestCase):
         self.window = VeronaWindow()
 
     def tearDown(self):
-        self.window._confirm_unsaved_changes = lambda: "discard"
+        self.window._confirm_unsaved_changes = lambda *_args: "discard"
         self.window.close()
         self.window.deleteLater()
         self.app.sendPostedEvents(None, QEvent.Type.DeferredDelete)

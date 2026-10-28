@@ -48,7 +48,7 @@ class SystemInfoTests(unittest.TestCase):
         for dialog in self.dialogs:
             dialog.reject()
             dialog.deleteLater()
-        self.window._confirm_unsaved_changes = lambda: "discard"
+        self.window._confirm_unsaved_changes = lambda *_args: "discard"
         self.window.close()
         self.window.deleteLater()
         self.app.sendPostedEvents(None, QEvent.Type.DeferredDelete)

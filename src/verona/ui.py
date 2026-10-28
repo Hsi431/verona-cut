@@ -34,7 +34,7 @@ from .transport import TCP_PORT
 from . import commands
 from .layers import cuttable, editable, printable
 from .device_lock import device_lock
-from .editor_widgets import CollapsibleSection, SafeDoubleSpinBox, SafeSpinBox
+from .editor_widgets import CollapsibleSection, SafeDoubleSpinBox, SafeSpinBox, WheelGuard
 from .themes import THEMES, palette as theme_palette, stylesheet as theme_stylesheet
 from .grouping import expand_selection, group_items, ungroup_items, remap_group_ids, selection_units as group_units
 
@@ -333,8 +333,7 @@ class DesignCanvas(QWidget):
             painter.setOpacity(self.owner.image_opacity.value() / 100)
             draw_printed_item(painter, item, image=_qoi_image(item["image_data"]),
                 clip_path=self.item_path(item, "image_clip") if item.get("image_clip") else None,
-                outer_path=self.item_bleed_path(item) if bleed.get("width_mm") else None,
-                inner_path=self.item_bleed_path(item, inner=True) if bleed.get("inner_mm") else None,
+                outer_path=self.item_bleed_path(item) if edge else None,
                 bleed_layer=self.item_edge_bleed(item) if edge else None)
             painter.restore()
 
@@ -702,7 +701,8 @@ class BleedDialog(QDialog):
         for spin, maximum, value in ((self.width_spin, 5, saved.get("width_mm", 0)),
                                       (self.inner_spin, 1, saved.get("inner_mm", 0))):
             spin.setRange(0, maximum)
-            spin.setDecimals(2)
+            spin.setDecimals(3)
+            spin.setSingleStep(0.05)
             spin.setSuffix(" mm")
             spin.setValue(value)
         self.color_button = QPushButton(tr("出血顏色…"))
@@ -723,6 +723,8 @@ class BleedDialog(QDialog):
         self.preview_label.setMinimumSize(360, 360)
         self.directory = QTemporaryDir()
         layout = QVBoxLayout(self)
+        if len(indices) > 1:
+            layout.addWidget(QLabel(tr("套用至所選的 {count} 張圖片", count=len(indices))))
         layout.addLayout(form)
         layout.addWidget(self.preview_label)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
@@ -911,6 +913,9 @@ class VeronaWindow(QMainWindow):
     def __init__(self, *, host=None, port=None) -> None:
         super().__init__()
         app = QApplication.instance()
+        if not hasattr(app, "_verona_wheel_guard"):
+            app._verona_wheel_guard = WheelGuard(app)
+            app.installEventFilter(app._verona_wheel_guard)
         # Application-wide style and font changes re-polish every open widget.
         if app.style().name().lower() != "fusion":
             app.setStyle("Fusion")
@@ -927,6 +932,7 @@ class VeronaWindow(QMainWindow):
         self.selection: set[int] = set()
         self._documents: list[dict[str, Any]] = []
         self._active_document = 0
+        self._closing = False
         self._tasks: dict[FunctionTask, tuple[Any, Any]] = {}
         self.usb_devices: list[Any] = []
         self.sending = False
@@ -1010,6 +1016,7 @@ class VeronaWindow(QMainWindow):
         self._tool(actions, tr("新增設計"), self.new_design)
         self._tool(actions, tr("匯入 SVG"), self.import_svg)
         self._tool(actions, tr("匯入圖片"), self.import_image)
+        self.print_button = self._tool(actions, tr("列印…"), self.print_design)
         self._tool(actions, tr("矩形"), self.add_rectangle)
         self._tool(actions, tr("圓形"), self.add_ellipse)
         self._tool(actions, tr("文字輪廓"), self.add_text)
@@ -1064,11 +1071,14 @@ class VeronaWindow(QMainWindow):
         inspector_layout.addWidget(self.bounds_warning)
         from .layer_panel import LayerPanel
         self.layer_panel = LayerPanel(self)
+        self.layer_section = CollapsibleSection(tr("圖層"), self.layer_panel, expanded=True)
         side_splitter = QSplitter(Qt.Orientation.Vertical)
-        side_splitter.addWidget(self.layer_panel)
+        side_splitter.addWidget(self.layer_section)
         side_splitter.addWidget(self.inspector_scroll)
         side_splitter.setSizes([220, 500])
         side_splitter.setChildrenCollapsible(False)
+        self.layer_section.expandedChanged.connect(lambda expanded: side_splitter.setSizes(
+            [220, 500] if expanded else [self.layer_section.minimumSizeHint().height(), 720]))
         inspector_panel.setMinimumWidth(370)
         inspector_layout.addWidget(side_splitter)
         splitter.addWidget(inspector_panel)
@@ -1171,10 +1181,14 @@ class VeronaWindow(QMainWindow):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(6)
-        layout.addWidget(QLabel(tr("路徑設定"), objectName="title"))
+        path_content = QWidget()
+        path_layout = QVBoxLayout(path_content)
+        path_layout.setContentsMargins(0, 4, 0, 4)
+        self.path_section = CollapsibleSection(tr("路徑設定"), path_content)
+        layout.addWidget(self.path_section)
         selection_hint = QLabel(tr("Ctrl／Shift 點選可多選；Shift 滾輪縮放。"), objectName="muted")
         selection_hint.setWordWrap(True)
-        layout.addWidget(selection_hint)
+        path_layout.addWidget(selection_hint)
 
         geometry = QFormLayout()
         geometry.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
@@ -1192,13 +1206,13 @@ class VeronaWindow(QMainWindow):
         geometry.addRow(tr("Y 起點"), self.y_spin)
         geometry.addRow(tr("寬度"), self.width_spin)
         geometry.addRow(tr("高度"), self.height_spin)
-        layout.addLayout(geometry)
+        path_layout.addLayout(geometry)
         self.lock_ratio = QCheckBox(tr("鎖定比例"))
         self.lock_ratio.setChecked(True)
-        layout.addWidget(self.lock_ratio)
+        path_layout.addWidget(self.lock_ratio)
         self.cut_checkbox = QCheckBox(tr("包含於切割"))
         self.cut_checkbox.toggled.connect(self._cut_toggled)
-        layout.addWidget(self.cut_checkbox)
+        path_layout.addWidget(self.cut_checkbox)
         self.output_mode = QComboBox()
         for label, mode in (("僅列印", "print_only"), ("僅切割", "cut_only"),
                             ("列印＋切割", "both"), ("不輸出", "none")):
@@ -1207,15 +1221,18 @@ class VeronaWindow(QMainWindow):
         self.output_mode.currentIndexChanged.connect(self._output_mode_changed)
         output = QFormLayout()
         output.addRow(tr("輸出用途"), self.output_mode)
-        layout.addLayout(output)
+        path_layout.addLayout(output)
         self.width_spin.valueChanged.connect(lambda value: self._dimension_changed("width", value))
         self.height_spin.valueChanged.connect(lambda value: self._dimension_changed("height", value))
         apply_size = QPushButton(tr("套用尺寸"))
         self.selection_edit_buttons = [apply_size]
         apply_size.clicked.connect(self.apply_size)
-        layout.addWidget(apply_size)
-        layout.addSpacing(6)
-        layout.addWidget(QLabel(tr("變形與群組")))
+        path_layout.addWidget(apply_size)
+        transform_content = QWidget()
+        transform_layout = QVBoxLayout(transform_content)
+        transform_layout.setContentsMargins(0, 4, 0, 4)
+        self.transform_section = CollapsibleSection(tr("變形與群組"), transform_content)
+        layout.addWidget(self.transform_section)
         transforms = QGridLayout()
         transforms.setSpacing(6)
         for index, (label, callback) in enumerate((
@@ -1236,9 +1253,12 @@ class VeronaWindow(QMainWindow):
                 self.ungroup_button = button
         for column in range(2):
             transforms.setColumnStretch(column, 1)
-        layout.addLayout(transforms)
-        layout.addSpacing(6)
-        layout.addWidget(QLabel(tr("對齊與均分")))
+        transform_layout.addLayout(transforms)
+        alignment_content = QWidget()
+        alignment_layout = QVBoxLayout(alignment_content)
+        alignment_layout.setContentsMargins(0, 4, 0, 4)
+        self.alignment_section = CollapsibleSection(tr("對齊與均分"), alignment_content)
+        layout.addWidget(self.alignment_section)
         align_grid = QGridLayout()
         align_grid.setSpacing(6)
         self.alignment_buttons = {}
@@ -1253,7 +1273,7 @@ class VeronaWindow(QMainWindow):
             self.alignment_buttons[mode] = button
         for column in range(3):
             align_grid.setColumnStretch(column, 1)
-        layout.addLayout(align_grid)
+        alignment_layout.addLayout(align_grid)
         distribution = QHBoxLayout()
         distribution.setSpacing(6)
         for mode, label in (("distribute_h", "水平均分"), ("distribute_v", "垂直均分")):
@@ -1262,11 +1282,37 @@ class VeronaWindow(QMainWindow):
             button.clicked.connect(lambda _checked=False, value=mode: self.align_selected(value))
             distribution.addWidget(button)
             self.alignment_buttons[mode] = button
-        layout.addLayout(distribution)
-        layout.addSpacing(6)
+        alignment_layout.addLayout(distribution)
+        post_edit_content = QWidget()
+        post_edit_layout = QVBoxLayout(post_edit_content)
+        post_edit_layout.setContentsMargins(0, 4, 0, 4)
+        self.post_edit_section = CollapsibleSection(tr("後編輯"), post_edit_content)
+        layout.addWidget(self.post_edit_section)
+        self.post_edit_summary = QLabel(tr("選取圖片後，可批次設定出血。"), objectName="muted")
+        self.post_edit_summary.setWordWrap(True)
+        post_edit_layout.addWidget(self.post_edit_summary)
+        self.edit_bleed_button = QPushButton(tr("新增／調整出血…"))
+        self.edit_bleed_button.clicked.connect(self.edit_selected_bleed)
+        post_edit_layout.addWidget(self.edit_bleed_button)
+        self.remove_bleed_button = QPushButton(tr("移除出血"))
+        self.remove_bleed_button.clicked.connect(self.remove_selected_bleed)
+        post_edit_layout.addWidget(self.remove_bleed_button)
+        self.edit_image_button = QPushButton(tr("編輯圖片遮罩…"))
+        self.edit_image_button.clicked.connect(self.edit_selected_image)
+        post_edit_layout.addWidget(self.edit_image_button)
+        for button in (self.edit_bleed_button, self.remove_bleed_button, self.edit_image_button):
+            button.setEnabled(False)
+        note = QLabel(tr("出血可同時套用到多張圖片，不改動切割線；遮罩編輯限單張。"), objectName="muted")
+        note.setWordWrap(True)
+        post_edit_layout.addWidget(note)
+        view_content = QWidget()
+        view_layout = QVBoxLayout(view_content)
+        view_layout.setContentsMargins(0, 4, 0, 4)
+        self.view_section = CollapsibleSection(tr("畫布顯示"), view_content)
+        layout.addWidget(self.view_section)
         self.cutline_view = QCheckBox(tr("淡化圖片並凸顯裁切線"))
         self.cutline_view.toggled.connect(self._toggle_cutline_view)
-        layout.addWidget(self.cutline_view)
+        view_layout.addWidget(self.cutline_view)
         image_view = QFormLayout()
         self.image_opacity = SafeSpinBox()
         self.image_opacity.setRange(0, 100)
@@ -1274,7 +1320,7 @@ class VeronaWindow(QMainWindow):
         self.image_opacity.setSuffix(" %")
         self.image_opacity.valueChanged.connect(lambda: self.canvas.update())
         image_view.addRow(tr("圖片顯示不透明度"), self.image_opacity)
-        layout.addLayout(image_view)
+        view_layout.addLayout(image_view)
 
         separator = QFrame()
         separator.setFrameShape(QFrame.Shape.HLine)
@@ -1315,15 +1361,15 @@ class VeronaWindow(QMainWindow):
         self.force_spin.setEnabled(False)
         self.registration_checkbox = QCheckBox(tr("Print & Cut 自動對位").replace("&", "&&"))
         self.registration_checkbox.toggled.connect(self._registration_toggled)
-        layout.addWidget(self.registration_checkbox)
         self.registration_info = QLabel(objectName="muted")
         self.registration_info.setWordWrap(True)
-        layout.addWidget(self.registration_info)
         mark_content = QWidget()
         mark_layout = QVBoxLayout(mark_content)
         mark_layout.setContentsMargins(0, 4, 0, 4)
         self.mark_section = CollapsibleSection(tr("紙張與定位設定"), mark_content)
         layout.addWidget(self.mark_section)
+        mark_layout.addWidget(self.registration_checkbox)
+        mark_layout.addWidget(self.registration_info)
         mark_layout.addWidget(QLabel(tr("標記距紙邊")))
         self.mark_margins = []
         margins_grid = QGridLayout()
@@ -1417,6 +1463,10 @@ class VeronaWindow(QMainWindow):
         connection_layout.addWidget(self.usb_row)
         self.connection_mode.currentIndexChanged.connect(self._update_connection_mode)
         self._update_connection_mode()
+        for signal in (self.passes_spin.valueChanged, self.speed_spin.valueChanged,
+                       self.force_spin.valueChanged, self.custom_settings.toggled,
+                       self.tool_combo.currentIndexChanged):
+            signal.connect(self._refresh_tab_titles)
         layout.addStretch(1)
         self.output_button = QPushButton(tr("匯出 PLT…"))
         self.output_button.clicked.connect(self.export_plt)
@@ -1826,7 +1876,9 @@ class VeronaWindow(QMainWindow):
         self._release_alt_grab()
         snapshot = self._snapshot()
         undo, redo = self.undo_stack, self.redo_stack
-        sections = self.mark_section.isExpanded(), self.connection_section.isExpanded(), self.cut_section.isExpanded()
+        section_names = ("layer_section", "path_section", "transform_section", "alignment_section", "post_edit_section",
+                         "view_section", "cut_section", "mark_section", "connection_section")
+        sections = {name: getattr(self, name).isExpanded() for name in section_names}
         image_view = self.image_opacity.value(), self.cutline_view.isChecked()
         scroll_position = (self.canvas_scroll.horizontalScrollBar().value(),
                            self.canvas_scroll.verticalScrollBar().value())
@@ -1841,9 +1893,8 @@ class VeronaWindow(QMainWindow):
         self._build_ui()
         self._build_menu()
         self._restore(snapshot)
-        self.mark_section.setExpanded(sections[0])
-        self.connection_section.setExpanded(sections[1])
-        self.cut_section.setExpanded(sections[2])
+        for name, expanded in sections.items():
+            getattr(self, name).setExpanded(expanded)
         self.cutline_view.setChecked(image_view[1])
         self.image_opacity.setValue(image_view[0])
         self.usb_devices = usb_devices
@@ -2115,6 +2166,22 @@ class VeronaWindow(QMainWindow):
         finally:
             dialog.deleteLater()
 
+    def remove_selected_bleed(self) -> None:
+        if self._selection_blocked():
+            return
+        indices = sorted(i for i in self.selected_indices() if "image_data" in self.items[i]
+                         and not self.items[i].get("registration_guide"))
+        if not indices:
+            return
+        from .editor_actions import build_edit
+        items, _, _ = build_edit(self.items, self.metadata, indices, "bleed",
+                                {"width_mm": 0, "inner_mm": 0, "color": "#ffffff"})
+        if items != self.items:
+            before = self._snapshot()
+            self.items = items
+            self.push_undo(before)
+            self.refresh_all()
+
     def pack_selected(self) -> None:
         if self._selection_blocked():
             return
@@ -2283,6 +2350,21 @@ class VeronaWindow(QMainWindow):
         self.output_mode.setEnabled(count > 0 and not blocked and not any(
             self.items[i].get("registration_guide") for i in self.selected_indices()))
         self.output_mode.blockSignals(False)
+        image_indices = [i for i in self.selected_indices() if "image_data" in self.items[i]
+                         and not self.items[i].get("registration_guide")]
+        self.edit_bleed_button.setEnabled(bool(image_indices) and not blocked)
+        self.remove_bleed_button.setEnabled(not blocked and any(self.items[i].get("bleed") for i in image_indices))
+        self.edit_image_button.setEnabled(count == 1 and len(image_indices) == 1 and not blocked)
+        bleeds = [self.items[i].get("bleed", {}) for i in image_indices]
+        if not bleeds:
+            summary = tr("選取圖片後，可批次設定出血。")
+        elif all(bleed == bleeds[0] for bleed in bleeds):
+            summary = tr("已選取 {count} 張圖片 · 外側 {outer} mm／內側 {inner} mm",
+                         count=len(bleeds), outer=f"{bleeds[0].get('width_mm', 0):.3f}",
+                         inner=f"{bleeds[0].get('inner_mm', 0):.3f}")
+        else:
+            summary = tr("已選取 {count} 張圖片 · 出血設定不同", count=len(bleeds))
+        self.post_edit_summary.setText(summary)
         self.layer_panel.refresh()
         if count:
             item = self.items[self.selected]
@@ -2764,16 +2846,35 @@ class VeronaWindow(QMainWindow):
         filename, _ = QFileDialog.getOpenFileName(self, tr("開啟設計"), "", tr("Verona 設計 (*.jdesign *.json *.lds)"))
         if not filename:
             return
+        self.open_path(filename)
+
+    def open_path(self, filename: str) -> bool:
+        """Use the same tab flow for desktop launches and the Open action."""
         self._refresh_tab_titles()
         for index, state in enumerate(self._documents):
             if state["file"] and Path(state["file"]).resolve() == Path(filename).resolve():
                 self.tab_bar.setCurrentIndex(index)
-                return
+                return True
+        # Read first so a bad file cannot disturb the current document or settings.
+        try:
+            document = self._read_document(filename)
+        except Exception as error:
+            QMessageBox.critical(self, tr("開啟失敗"), str(error))
+            return False
         new_tab = bool(self.items or self.current_file or self.is_dirty())
         if new_tab:
             self.new_design()
-        if not self._load_document(filename) and new_tab:
-            self.close_document(self._active_document)
+        self._install_document(filename, *document)
+        return True
+
+    def open_paths(self, paths):
+        for path in paths:
+            self.open_path(path)
+        if self.isMinimized():
+            self.showNormal()
+        self.show()
+        self.raise_()
+        self.activateWindow()
 
     def _load_document(self, filename: str) -> bool:
         try:
@@ -2787,7 +2888,12 @@ class VeronaWindow(QMainWindow):
         if Path(filename).suffix.lower() == ".lds":
             from .lds import load_lds
             native = load_lds(filename)
-            return native.items, native.settings or self._cut_settings(), native.metadata
+            settings = native.settings
+            if settings is None:
+                _, settings = self._validate_document({"format": "verona", "version": 1,
+                                                       "units": "mm", "items": []})
+                settings.update({key: self._cut_settings()[key] for key in ("connection", "host", "port")})
+            return native.items, settings, native.metadata
         from .input_safety import read_design
         data = read_design(filename)
         items, settings = self._validate_document(data)
@@ -2955,6 +3061,9 @@ class VeronaWindow(QMainWindow):
             raise ValueError(tr("設計檔中的中繼資料無效。"))
         if "optimize_paths" in metadata and type(metadata["optimize_paths"]) is not bool:
             raise ValueError(tr("設計檔中的路徑排序設定無效。"))
+        if "printer_settings" in metadata:
+            from .print_dialog import validate_printer_settings
+            validate_printer_settings(metadata["printer_settings"])
         if "print_cut" in metadata:
             registration = metadata["print_cut"]
             if not isinstance(registration, dict) or type(registration.get("enabled")) is not bool:
@@ -3078,22 +3187,25 @@ class VeronaWindow(QMainWindow):
     def is_dirty(self) -> bool:
         return self._document_state() != self.saved_snapshot
 
-    def _confirm_unsaved_changes(self) -> str:
+    def _confirm_unsaved_changes(self, filename=None) -> str:
         dialog = QMessageBox(self)
         dialog.setIcon(QMessageBox.Icon.Warning)
         dialog.setWindowTitle(tr("未儲存的變更"))
-        dialog.setText(tr("這份設計有尚未儲存的變更。要先儲存嗎？"))
+        dialog.setText(tr("「{name}」有尚未儲存的變更。要先儲存嗎？", name=Path(filename).name)
+                       if filename else tr("這份設計有尚未儲存的變更。要先儲存嗎？"))
         save = dialog.addButton(tr("儲存"), QMessageBox.ButtonRole.AcceptRole)
         dialog.addButton(tr("捨棄"), QMessageBox.ButtonRole.DestructiveRole)
         dialog.addButton(tr("取消"), QMessageBox.ButtonRole.RejectRole)
         dialog.setDefaultButton(save)
         dialog.exec()
         clicked = dialog.clickedButton()
+        choice = "cancel"
         if clicked is save:
-            return "save"
-        if clicked is not None and clicked.text() == tr("捨棄"):
-            return "discard"
-        return "cancel"
+            choice = "save"
+        elif clicked is not None and clicked.text() == tr("捨棄"):
+            choice = "discard"
+        dialog.deleteLater()
+        return choice
 
     def _maybe_save_changes(self) -> bool:
         if not self.is_dirty():
@@ -3106,16 +3218,32 @@ class VeronaWindow(QMainWindow):
         return False
 
     def closeEvent(self, event: Any) -> None:
+        if self._closing:
+            event.ignore()
+            return
+        self._closing = True
         original = self._active_document
-        for index in range(len(self._documents)):
-            self.tab_bar.setCurrentIndex(index)
-            if not self._maybe_save_changes():
+        self._documents[original] = self._tab_state()
+        try:
+            for index, state in enumerate(self._documents):
+                if {"items": state["items"], "settings": state["settings"],
+                        "metadata": state["metadata"]} == state["saved"]:
+                    continue
+                choice = self._confirm_unsaved_changes(state["file"])
+                if choice == "discard":
+                    continue
+                if choice == "save":
+                    self.tab_bar.setCurrentIndex(index)
+                    if self.save_design():
+                        continue
                 self.tab_bar.setCurrentIndex(original)
                 event.ignore()
                 return
-        self._release_alt_grab()
-        QApplication.instance().removeEventFilter(self)
-        event.accept()
+            self._release_alt_grab()
+            QApplication.instance().removeEventFilter(self)
+            event.accept()
+        finally:
+            self._closing = False
 
     def export_plt(self) -> None:
         if not self.items:
@@ -3137,30 +3265,42 @@ class VeronaWindow(QMainWindow):
     def print_design(self) -> None:
         from PySide6.QtCore import QSizeF
         from PySide6.QtGui import QPageLayout, QPageSize
-        from PySide6.QtPrintSupport import QPrintDialog, QPrinter, QPrinterInfo
+        from PySide6.QtPrintSupport import QPrinter, QPrinterInfo
         from .printing import print_document, print_page_size
+        from .print_dialog import PrintDialog, apply_printer_settings, printer_settings, validate_printer_settings
         try:
-            calibration = self.metadata.get("source_format") == "calibration"
-            size = print_page_size(self.items, self.metadata, calibration=calibration)
+            items, metadata = self.items, self.metadata
+            calibration = metadata.get("source_format") == "calibration"
+            size = print_page_size(items, metadata, calibration=calibration)
             printers = QPrinterInfo.availablePrinters()
             if not printers:
                 QMessageBox.warning(self, tr("找不到印表機"), tr("請先在 Linux 設定印表機，並確認列印服務已啟動。"))
                 return
-            selected = next((info for info in printers if info.isDefault()), printers[0])
+            remembered = metadata.get("printer_settings")
+            if remembered is None:
+                try:
+                    remembered = validate_printer_settings(json.loads(self.settings.value("printing/last", "{}", type=str)))
+                except (TypeError, ValueError):
+                    remembered = {}
+            selected = next((info for info in printers if info.printerName() == remembered.get("printer_name")),
+                            next((info for info in printers if info.isDefault()), printers[0]))
             printer = QPrinter(selected, QPrinter.PrinterMode.HighResolution)
+            apply_printer_settings(printer, remembered)
             printer.setDocName(Path(self.current_file).stem if self.current_file else tr("未命名設計"))
             width, height = size.width(), size.height()
             printer.setPageSize(QPageSize(QSizeF(min(width, height), max(width, height)), QPageSize.Unit.Millimeter))
             printer.setPageOrientation(QPageLayout.Orientation.Landscape if width > height else QPageLayout.Orientation.Portrait)
             printer.setFullPage(True)
             printer.setDuplex(QPrinter.DuplexMode.DuplexNone)
-            dialog = QPrintDialog(printer, self)
-            dialog.setWindowTitle(tr("列印（100% 原尺寸）"))
-            dialog.setOptions(QPrintDialog.PrintDialogOption.PrintShowPageSize
-                              | QPrintDialog.PrintDialogOption.PrintCollateCopies)
+            dialog = PrintDialog(printer, items, metadata, calibration=calibration,
+                                 saved_printer_name=remembered.get("printer_name"), parent=self)
             if dialog.exec() != QDialog.DialogCode.Accepted:
                 return
-            print_document(printer, self.items, self.metadata, calibration=calibration)
+            used_settings = printer_settings(printer)
+            print_document(printer, items, metadata, calibration=calibration)
+            metadata["printer_settings"] = used_settings
+            self.settings.setValue("printing/last", json.dumps(used_settings, ensure_ascii=False))
+            self._refresh_tab_titles()
             self.status_label.setText(tr("已送至 {name} · 100% 原尺寸", name=printer.printerName()))
         except Exception as error:
             QMessageBox.critical(self, tr("列印失敗"), str(error))
@@ -3201,10 +3341,20 @@ def main(argv: list[str] | None = None) -> int:
     settings = QSettings("Verona", "Workspace")
     set_language(options.lang or settings.value("language", os.environ.get("VERONA_LANGUAGE", "en")))
     app = QApplication.instance() or QApplication([sys.argv[0], *qt_args])
+    from .desktop_session import DesktopSession
+    session = DesktopSession(app)
+    try:
+        if not session.start([options.open_path] if options.open_path else []):
+            return 0
+    except OSError as error:
+        QMessageBox.critical(None, tr("開啟失敗"), str(error))
+        return 1
+    app.aboutToQuit.connect(session.close)
     set_language(get_language())
     app.setStyle("Fusion")
     app.setFont(QFont("Noto Sans", 10))
     window = VeronaWindow(host=host, port=options.port)
+    session.openRequested.connect(window.open_paths)
     from .editor_bridge import EditorBridge
     try:
         window.editor_bridge = EditorBridge(window)
@@ -3213,7 +3363,7 @@ def main(argv: list[str] | None = None) -> int:
         window.status_label.setText(tr("AI 協作連線無法啟動：{reason}", reason=str(error)))
     window.show()
     if options.open_path:
-        window._load_document(options.open_path)
+        window.open_path(options.open_path)
         if host is not None:
             window.wifi_host.setText(host)
         if options.port is not None:

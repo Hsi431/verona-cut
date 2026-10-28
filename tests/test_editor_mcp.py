@@ -34,6 +34,7 @@ class EditorMcpTests(unittest.IsolatedAsyncioTestCase):
             source.write_text(json.dumps(document))
             original = source.read_bytes()
             env = {**os.environ, "QT_QPA_PLATFORM": "offscreen", "XDG_RUNTIME_DIR": str(runtime),
+                   "XDG_SESSION_ID": f"verona-test-{directory.name}",
                    "XDG_CONFIG_HOME": str(directory / "config")}
             gui = await asyncio.create_subprocess_exec(sys.executable, "-m", "verona",
                 "--open", str(source), cwd=ROOT, env=env,

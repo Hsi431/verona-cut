@@ -49,6 +49,25 @@ def _invalid(reason):
     return ValueError(tr("無法讀取 LDS：{reason}", reason=reason))
 
 
+def _logo_bleed(payload, matrix, color):
+    """Kind 110 stores pixel offsets and bleed/clip/inner flags at +8/+9/+10."""
+    if len(payload) != 11:
+        raise _invalid("invalid image settings length")
+    offset, width, enabled, clip, inner = struct.unpack("<ffBBB", payload)
+    if (not all(math.isfinite(value) for value in (offset, width)) or width < 0
+            or any(flag not in (0, 1) for flag in (enabled, clip, inner))):
+        raise _invalid("invalid image bleed settings")
+    if not enabled or not (width or inner):
+        return None
+    # TMatrixObj.GetScale measures its transformed unit diagonal. Native outer
+    # strokes have radius `width`; the optional inner stroke is 3 pixels wide.
+    _, _, a, b, c, d = matrix
+    scale = math.hypot(a + c, b + d) / math.sqrt(2)
+    from .artwork import validate_bleed
+    return validate_bleed({"width_mm": width * scale, "inner_mm": 1.5 * scale if inner else 0.,
+                           "color": f"#{color & 0xffffff:06x}"})
+
+
 def _map_point(matrix, x, y):
     tx, ty, a, b, c, d = matrix
     return tx + a * x + c * y, ty + b * x + d * y
@@ -322,6 +341,13 @@ def load_lds(filename, tolerance=0.05):
                 item = {"name": tr("原生圖片 {number}", number=shape.identifier), "contours": contours,
                         "source_color": color, "cut": 102 in curve_records and not is_registration,
                         "image_data": encoded, "image_transform": list(matrix), "image_clip": image_clip}
+                image_settings = [body for kind, _, body in shape.records if kind == 110]
+                if len(image_settings) > 1:
+                    raise _invalid("duplicate image settings")
+                if image_settings:
+                    bleed = _logo_bleed(image_settings[0], matrix, color)
+                    if bleed:
+                        item["bleed"] = bleed
             if contours:
                 if is_registration:
                     item["registration_guide"] = True

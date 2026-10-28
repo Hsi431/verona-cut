@@ -155,8 +155,9 @@ class DirectPrintingTests(unittest.TestCase):
                 with self.subTest(language=language, calibration=calibration), \
                         patch.object(QPrinterInfo, "availablePrinters", return_value=[MagicMock()]), \
                         patch("PySide6.QtPrintSupport.QPrinter") as printer_class, \
-                        patch("PySide6.QtPrintSupport.QPrintDialog") as dialog_class, \
-                        patch.object(printing, "print_document") as submit:
+                        patch("verona.print_dialog.PrintDialog") as dialog_class, \
+                        patch.object(printing, "print_document") as submit, \
+                        patch("verona.print_dialog.printer_settings", return_value={"printer_name": "Test printer"}):
                     printer_class.return_value.printerName.return_value = "Test printer"
                     dialog_class.return_value.exec.return_value = QDialog.DialogCode.Accepted
                     if calibration:
@@ -170,7 +171,9 @@ class DirectPrintingTests(unittest.TestCase):
                     self.assertIn("Test printer", window.status_label.text())
                     self.assertIn("100%", window.status_label.text())
             window.metadata.pop("source_format")
+            before["metadata"]["printer_settings"] = {"printer_name": "Test printer"}
             self.assertEqual(window._snapshot(), before)
+            self.assertTrue(window.is_dirty())
 
     def test_cancelled_dialog_does_not_submit_or_change_document(self):
         window = self.window()
@@ -178,7 +181,7 @@ class DirectPrintingTests(unittest.TestCase):
         status = window.status_label.text()
         with patch.object(QPrinterInfo, "availablePrinters", return_value=[MagicMock()]), \
                 patch("PySide6.QtPrintSupport.QPrinter"), \
-                patch("PySide6.QtPrintSupport.QPrintDialog") as dialog, \
+                patch("verona.print_dialog.PrintDialog") as dialog, \
                 patch.object(printing, "print_document") as submit:
             dialog.return_value.exec.return_value = QDialog.DialogCode.Rejected
             window.print_design()
@@ -189,13 +192,13 @@ class DirectPrintingTests(unittest.TestCase):
     def test_missing_queues_and_invalid_document_never_open_print_dialog(self):
         window = self.window()
         with patch.object(QPrinterInfo, "availablePrinters", return_value=[]), \
-                patch("PySide6.QtPrintSupport.QPrintDialog") as dialog, \
+                patch("verona.print_dialog.PrintDialog") as dialog, \
                 patch.object(QMessageBox, "warning") as warning:
             window.print_design()
             warning.assert_called_once()
             dialog.assert_not_called()
         window.items = []
-        with patch("PySide6.QtPrintSupport.QPrintDialog") as dialog, \
+        with patch("verona.print_dialog.PrintDialog") as dialog, \
                 patch.object(QMessageBox, "critical") as critical:
             window.print_design()
             critical.assert_called_once()
@@ -206,8 +209,9 @@ class DirectPrintingTests(unittest.TestCase):
         status = window.status_label.text()
         with patch.object(QPrinterInfo, "availablePrinters", return_value=[MagicMock()]), \
                 patch("PySide6.QtPrintSupport.QPrinter"), \
-                patch("PySide6.QtPrintSupport.QPrintDialog") as dialog, \
+                patch("verona.print_dialog.PrintDialog") as dialog, \
                 patch.object(printing, "print_document", side_effect=OSError("queue failed")) as submit, \
+                patch("verona.print_dialog.printer_settings", return_value={"printer_name": "Test printer"}), \
                 patch.object(QMessageBox, "critical") as critical:
             dialog.return_value.exec.return_value = QDialog.DialogCode.Accepted
             window.print_design()

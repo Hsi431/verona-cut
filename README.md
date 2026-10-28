@@ -29,6 +29,10 @@ No storefront, online asset library or background cloud synchronization.
 - Shapes, text outlines, node and curve editing, masks, contour tracing and printed bleed.
 - Move, resize, rotate, mirror, group, align, distribute and automatically arrange artwork.
 - Multiple document tabs, undo/redo, light/dark themes, English and Traditional Chinese.
+- Desktop file opens share one workspace and reuse an already-open document's tab.
+- Collapsible inspector sections and wheel-safe dropdowns and numeric controls.
+- A **Post-edit** inspector section for batch bleed changes on existing images,
+  with undo/redo, plus a single-image mask editor; no reimport is needed.
 - Layers with selection, renaming, stacking order, visibility, locking and separate print/cut switches.
 - Explicit **Print only / Cut only / Print and cut** image import; change output later without losing the image.
 - Print & Cut registration marks, measured alignment correction, direct printing and PDF export.
@@ -45,6 +49,23 @@ Hidden layers are excluded from printing and cutting. Locked layers still
 output normally but cannot be moved or edited until unlocked. Layer changes
 support undo/redo and are saved in the design. Print-only sheets can be
 printed or exported as PDF without registration marks.
+
+**Print** is available beside the import buttons and via `Ctrl+P`. The preview
+shows the sheet at actual size, the selected printer, paper, media/quality,
+resolution and copies. **Printer and media settings…** opens Qt's Linux print
+dialog for driver options. Previewing and applying settings do not submit a job.
+After successful submission, Verona remembers the printer and its media/quality
+options locally and includes them when saving either `.jdesign` or `.lds`.
+Saved document preferences take priority over the last-used settings; paper
+dimensions and orientation always follow the design. A missing printer falls
+back to the current default, with a notice in the preview.
+
+Native LDS image bleed settings are imported as editable outer and inner bleed
+in millimetres, using the image's scale and saved bleed color. Earlier Verona
+versions skipped these settings. If such a file was already saved in Verona,
+the original `.lds.bak` retains the native data. Select multiple images and open
+**Post-edit → Add / adjust bleed…** to apply a shared setting, or **Remove bleed**
+to remove the editable bleed layer. Original pixels and cut paths are retained.
 
 **LDS saving is experimental.** Use **Save** to write back to an opened `.lds`,
 or **Save design as…** (`Ctrl+Shift+S`) to choose `.jdesign` or `.lds`.
