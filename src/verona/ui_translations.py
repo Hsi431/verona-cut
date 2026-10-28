@@ -1,6 +1,11 @@
 """English strings keyed by the Traditional Chinese UI source text."""
 
 ENGLISH = {
+    "還原原始出血": "Restore original bleed",
+    "還原所選圖片的原始出血；可選擇原始 LDS 或備份，保留目前圖案與切割線。": "Restore selected images' bleed from an original LDS or backup, preserving artwork and cut paths.",
+    "選擇原始 LDS 或備份": "Choose an original LDS or backup",
+    "LDS 原始檔與備份 (*.lds *.lds.bak)": "Original LDS and backups (*.lds *.lds.bak)",
+    "選取圖片與原始備份無法唯一對應；尚未變更任何出血設定。": "Selected images cannot be uniquely matched to the original backup. No bleed settings were changed.",
     "套用至所選的 {count} 張圖片": "Apply to all {count} selected images",
     "後編輯": "Post-edit",
     "選取圖片後，可批次設定出血。": "Select images to edit their bleed together.",

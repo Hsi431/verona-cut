@@ -66,6 +66,10 @@ versions skipped these settings. If such a file was already saved in Verona,
 the original `.lds.bak` retains the native data. Select multiple images and open
 **Post-edit → Add / adjust bleed…** to apply a shared setting, or **Remove bleed**
 to remove the editable bleed layer. Original pixels and cut paths are retained.
+**Restore original bleed** recovers settings from the matching `.lds.bak`, or
+lets you choose the original LDS/backup after saving as `.jdesign`. It preserves
+current layer edits and requires matching image placement, masks and cut paths;
+the recovery is undoable and does not overwrite either source file.
 
 **LDS saving is experimental.** Use **Save** to write back to an opened `.lds`,
 or **Save design as…** (`Ctrl+Shift+S`) to choose `.jdesign` or `.lds`.

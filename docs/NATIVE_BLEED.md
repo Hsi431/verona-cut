@@ -23,10 +23,18 @@ The importer converts these lengths into Verona's document millimetres. It
 retains the original bitmap, image placement, mask, and cutting curves.
 Unknown/invalid flag values and malformed records are rejected.
 
-Solid bleed rendering clips a round stroke to the inside or outside of the
-contour. This avoids expensive offset booleans for detailed native outlines.
+Bleed rendering clips a round stroke to the inside or outside of the contour.
+Solid mode uses a color; edge-extension mode uses the nearest-color image as a
+texture brush. Edge sampling clips the cut and artwork masks sequentially,
+without computing a vector intersection. This avoids expensive offset booleans
+for detailed native outlines in both modes.
 Geometric bleed paths remain available for operations requiring actual areas.
 PDF and canvas output share the same drawing implementation.
+
+The post-edit recovery action matches original images by their embedded data,
+placement, mask and cut contours. Only bleed settings are replaced. Names, layer
+state, current settings and other artwork are retained. All selected images must
+have an unambiguous match before anything changes; recovery supports undo.
 
 The binary evidence establishes field use and rendering calculations. It does
 not establish pixel-identical output with every Leonardo version or printer.

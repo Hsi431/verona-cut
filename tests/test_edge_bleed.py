@@ -1,5 +1,6 @@
 """Nearest source colors extend only into the bleed ring, retaining source/cuts."""
 import copy
+import math
 import os
 from pathlib import Path
 import tempfile
@@ -94,6 +95,30 @@ class EdgeBleedTests(unittest.TestCase):
         draw_bleed(painter, changed)
         painter.end()
         self.assertEqual(canvas.pixelColor(300, 250), QColor("white"))
+
+    def test_detailed_edge_preview_and_canvas_never_build_offset_boolean_geometry(self):
+        from verona import artwork
+        item = two_colors()
+        contour = [(30 + 9 * math.cos(i * math.tau / 5000),
+                    25 + 4 * math.sin(i * math.tau / 5000)) for i in range(5000)]
+        contour.append(contour[0])
+        item["contours"] = [contour]
+        item["image_clip"] = copy.deepcopy(item["contours"])
+        with patch.object(artwork, "_offset_path", side_effect=AssertionError("Edge display must not offset contours")):
+            changed = self.extend(item)
+            canvas = QImage(700, 700, QImage.Format.Format_RGBA8888)
+            canvas.fill(Qt.GlobalColor.white)
+            painter = QPainter(canvas)
+            painter.scale(10, 10)
+            draw_bleed(painter, changed)
+            painter.end()
+            window = VeronaWindow()
+            window.items = [changed]
+            window.refresh_all()
+            window.canvas.grab()
+            self.assertEqual(changed["contours"], item["contours"])
+            self.assertEqual(changed["image_data"], item["image_data"])
+            window.deleteLater()
 
     def test_empty_source_is_rejected_before_applying_or_loading(self):
         source = QImage(20, 10, QImage.Format.Format_RGBA8888)

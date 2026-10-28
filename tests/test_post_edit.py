@@ -13,7 +13,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QSettings
 from PySide6.QtGui import QColor, QImage, QPainter
-from PySide6.QtWidgets import QApplication, QDialog
+from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QMessageBox
 
 from verona import artwork
 from verona.lds import load_lds
@@ -150,3 +150,65 @@ class PostEditTests(unittest.TestCase):
         self.assertEqual(bounds.getRect(), (19., 19., 22., 12.))
         for x, expected in ((188, "#ffffff"), (195, "#ff0000"), (202, "#ff0000"), (215, "#000000")):
             self.assertEqual(pixels.pixelColor(x, 250).name(), expected)
+
+    def test_restore_original_bleed_preserves_unsaved_edits_and_can_be_undone(self):
+        original = self.load_native([struct.pack("<ffBBB", 0, 4, 1, 0, 1)])
+        path = Path(self.folder.name) / "original.lds"
+        backup = path.with_name(path.name + ".bak")
+        backup.write_bytes(path.read_bytes())
+        window = self.window()
+        current = copy.deepcopy(original)
+        current["name"] = "Renamed artwork"
+        current["cut"] = False
+        current["bleed"] = {"width_mm": 1., "color": "#ffffff", "mode": "edge"}
+        window.items = [current, rectangle("extra object", x=70)]
+        window.metadata = {"unsaved": "keep this"}
+        window.current_file = str(path)
+        window.refresh_all()
+        window.select_many([0, 1])
+        before = copy.deepcopy(window._document_state())
+        self.assertTrue(window.restore_bleed_button.isEnabled())
+        window.restore_bleed_button.click()
+        expected = copy.deepcopy(before)
+        expected["items"][0]["bleed"] = original["bleed"]
+        self.assertEqual(window._document_state(), expected)
+        self.assertEqual(window.selected_indices(), {0, 1})
+        self.assertTrue(window.is_dirty())
+        self.assertEqual(backup.read_bytes(), path.read_bytes())
+        window.undo()
+        self.assertEqual(window._document_state(), before)
+
+    def test_restore_unmatched_backup_leaves_every_selected_image_untouched(self):
+        item = self.load_native([struct.pack("<ffBBB", 0, 4, 1, 0, 1)])
+        path = Path(self.folder.name) / "original.lds"
+        path.with_name(path.name + ".bak").write_bytes(path.read_bytes())
+        window = self.window()
+        changed = copy.deepcopy(item)
+        changed["image_transform"][0] += 3
+        window.items = [item, changed]
+        window.current_file = str(path)
+        window.refresh_all()
+        window.select_many([0, 1])
+        before = copy.deepcopy(window._document_state())
+        with patch.object(QMessageBox, "warning") as warning:
+            window.restore_bleed_button.click()
+        warning.assert_called_once()
+        self.assertEqual(window._document_state(), before)
+        self.assertFalse(window.undo_stack)
+
+    def test_restore_can_choose_original_after_saving_as_jdesign_and_cancel_is_safe(self):
+        original = self.load_native([struct.pack("<ffBBB", 0, 4, 1, 0, 1)])
+        window = self.window()
+        window.items = [copy.deepcopy(original)]
+        window.items[0].pop("bleed")
+        window.current_file = str(Path(self.folder.name) / "copy.jdesign")
+        window.refresh_all()
+        window.select(0)
+        before = copy.deepcopy(window._document_state())
+        with patch.object(QFileDialog, "getOpenFileName", return_value=("", "")):
+            window.restore_bleed_button.click()
+        self.assertEqual(window._document_state(), before)
+        self.assertFalse(window.undo_stack)
+        with patch.object(QFileDialog, "getOpenFileName", return_value=(str(Path(self.folder.name) / "original.lds"), "")):
+            window.restore_bleed_button.click()
+        self.assertEqual(window.items[0]["bleed"], original["bleed"])

@@ -4,10 +4,10 @@ import math
 
 import numpy as np
 from PySide6.QtCore import QPointF, Qt
-from PySide6.QtGui import QImage, QPainter, QTransform
+from PySide6.QtGui import QBrush, QImage, QPainter, QTransform
 from scipy.ndimage import distance_transform_edt
 
-from .artwork import bleed_path, contour_path, image_path
+from .artwork import _draw_solid_band, contour_path, image_path
 from .raster_import import _rgba_array, decode_embedded_image
 
 
@@ -74,11 +74,14 @@ def _edge_bleed_image(item):
     """Return an extension raster and its world transform; original image stays separate.
 
     Sample at up to 300 dpi with a maximum 1200-pixel edge. Only visible source
-    colors inside the cut contour provide seeds. The vector bleed ring remains
-    the exact print clip; this is color extrapolation, not texture synthesis.
+    colors inside the cut contour provide seeds. Display uses a clipped round
+    stroke, so detailed contours never require offset boolean operations.
     """
-    ring = bleed_path(item)
-    box = ring.boundingRect()
+    base = contour_path(item["contours"])
+    if base.isEmpty():
+        return QImage(), QTransform()
+    margin = item["bleed"]["width_mm"]
+    box = base.controlPointRect().adjusted(-margin, -margin, margin, margin)
     if box.isEmpty():
         return QImage(), QTransform()
     density = min(300/25.4, 1200/max(box.width(), box.height()))
@@ -92,7 +95,8 @@ def _edge_bleed_image(item):
         painter.scale(sx, sy)
         painter.translate(-box.left(), -box.top())
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        painter.setClipPath(contour_path(item["contours"]).intersected(image_path(item)))
+        painter.setClipPath(base)
+        painter.setClipPath(image_path(item), Qt.ClipOperation.IntersectClip)
         tx, ty, a, b, c, d = item["image_transform"]
         painter.setTransform(QTransform(a, b, c, d, tx, ty), True)
         painter.drawImage(QPointF(0, 0), decode_embedded_image(item["image_data"]))
@@ -120,9 +124,16 @@ def check_edge_bleed(item):
 
 def draw_edge_bleed(painter, item, layer=None, ring=None):
     image, transform = edge_bleed_image(item) if layer is None else layer
+    if image.isNull():
+        return
+    if ring is None:
+        brush = QBrush(image)
+        brush.setTransform(transform)
+        _draw_solid_band(painter, item, brush=brush)
+        return
     painter.save()
     try:
-        painter.setClipPath(bleed_path(item) if ring is None else ring, Qt.ClipOperation.IntersectClip)
+        painter.setClipPath(ring, Qt.ClipOperation.IntersectClip)
         painter.setTransform(transform, True)
         painter.drawImage(QPointF(0, 0), image)
     finally:

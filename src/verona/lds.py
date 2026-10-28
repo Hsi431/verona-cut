@@ -68,6 +68,34 @@ def _logo_bleed(payload, matrix, color):
                            "color": f"#{color & 0xffffff:06x}"})
 
 
+def restore_native_bleed(items, indices, backup):
+    """Recover only bleed settings for exactly matching original artwork."""
+    from .ui import _copy_items
+
+    def identity(item):
+        return (item["image_data"], tuple(item["image_transform"]),
+                tuple(tuple(contour) for contour in item["contours"]),
+                tuple(tuple(contour) for contour in item.get("image_clip", [])))
+
+    originals = {}
+    for item in load_lds(backup).items:
+        if "image_data" in item and not item.get("registration_guide"):
+            originals.setdefault(identity(item), []).append(item.get("bleed"))
+    recovered = {}
+    for index in indices:
+        matches = originals.get(identity(items[index]), [])
+        if not matches or any(value != matches[0] for value in matches):
+            raise ValueError(tr("選取圖片與原始備份無法唯一對應；尚未變更任何出血設定。"))
+        recovered[index] = matches[0]
+    result = _copy_items(items)
+    for index, bleed in recovered.items():
+        if bleed:
+            result[index]["bleed"] = dict(bleed)
+        else:
+            result[index].pop("bleed", None)
+    return result
+
+
 def _map_point(matrix, x, y):
     tx, ty, a, b, c, d = matrix
     return tx + a * x + c * y, ty + b * x + d * y

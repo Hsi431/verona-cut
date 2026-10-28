@@ -333,7 +333,6 @@ class DesignCanvas(QWidget):
             painter.setOpacity(self.owner.image_opacity.value() / 100)
             draw_printed_item(painter, item, image=_qoi_image(item["image_data"]),
                 clip_path=self.item_path(item, "image_clip") if item.get("image_clip") else None,
-                outer_path=self.item_bleed_path(item) if edge else None,
                 bleed_layer=self.item_edge_bleed(item) if edge else None)
             painter.restore()
 
@@ -1297,10 +1296,14 @@ class VeronaWindow(QMainWindow):
         self.remove_bleed_button = QPushButton(tr("移除出血"))
         self.remove_bleed_button.clicked.connect(self.remove_selected_bleed)
         post_edit_layout.addWidget(self.remove_bleed_button)
+        self.restore_bleed_button = QPushButton(tr("還原原始出血"))
+        self.restore_bleed_button.setToolTip(tr("還原所選圖片的原始出血；可選擇原始 LDS 或備份，保留目前圖案與切割線。"))
+        self.restore_bleed_button.clicked.connect(self.restore_selected_native_bleed)
+        post_edit_layout.addWidget(self.restore_bleed_button)
         self.edit_image_button = QPushButton(tr("編輯圖片遮罩…"))
         self.edit_image_button.clicked.connect(self.edit_selected_image)
         post_edit_layout.addWidget(self.edit_image_button)
-        for button in (self.edit_bleed_button, self.remove_bleed_button, self.edit_image_button):
+        for button in (self.edit_bleed_button, self.remove_bleed_button, self.restore_bleed_button, self.edit_image_button):
             button.setEnabled(False)
         note = QLabel(tr("出血可同時套用到多張圖片，不改動切割線；遮罩編輯限單張。"), objectName="muted")
         note.setWordWrap(True)
@@ -2182,6 +2185,30 @@ class VeronaWindow(QMainWindow):
             self.push_undo(before)
             self.refresh_all()
 
+    def restore_selected_native_bleed(self) -> None:
+        if self._selection_blocked():
+            return
+        indices = sorted(i for i in self.selected_indices() if "image_data" in self.items[i]
+                         and not self.items[i].get("registration_guide"))
+        if not indices:
+            return
+        backup = self.current_file + ".bak" if self.current_file else ""
+        if not backup or not Path(backup).is_file():
+            backup, _ = QFileDialog.getOpenFileName(self, tr("選擇原始 LDS 或備份"), self.current_file or "",
+                                                  tr("LDS 原始檔與備份 (*.lds *.lds.bak)"))
+            if not backup:
+                return
+        try:
+            from .lds import restore_native_bleed
+            items = restore_native_bleed(self.items, indices, backup)
+            if items != self.items:
+                before = self._snapshot()
+                self.items = items
+                self.push_undo(before)
+                self.refresh_all()
+        except (ValueError, OSError) as error:
+            QMessageBox.warning(self, tr("還原原始出血"), str(error))
+
     def pack_selected(self) -> None:
         if self._selection_blocked():
             return
@@ -2354,6 +2381,7 @@ class VeronaWindow(QMainWindow):
                          and not self.items[i].get("registration_guide")]
         self.edit_bleed_button.setEnabled(bool(image_indices) and not blocked)
         self.remove_bleed_button.setEnabled(not blocked and any(self.items[i].get("bleed") for i in image_indices))
+        self.restore_bleed_button.setEnabled(bool(image_indices) and not blocked)
         self.edit_image_button.setEnabled(count == 1 and len(image_indices) == 1 and not blocked)
         bleeds = [self.items[i].get("bleed", {}) for i in image_indices]
         if not bleeds:

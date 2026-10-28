@@ -105,7 +105,7 @@ def draw_inner_bleed(painter, item):
         _draw_solid_band(painter, item, inner=True)
 
 
-def _draw_solid_band(painter, item, *, inner=False):
+def _draw_solid_band(painter, item, *, inner=False, brush=None):
     """Clip a round stroke instead of resolving thousands of overlapping joins."""
     width = item["bleed"]["inner_mm" if inner else "width_mm"]
     base = contour_path(item["contours"])
@@ -118,7 +118,7 @@ def _draw_solid_band(painter, item, *, inner=False):
     painter.save()
     try:
         painter.setClipPath(clip, Qt.ClipOperation.IntersectClip)
-        pen = QPen(QColor(item["bleed"]["color"]), width * 2)
+        pen = QPen(brush if brush is not None else QColor(item["bleed"]["color"]), width * 2)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         painter.strokePath(base, pen)
