@@ -29,7 +29,7 @@ def findings(name, data):
     path = PurePosixPath(name)
     if path.is_absolute() or ".." in path.parts:
         yield "non-relative archive path"
-    if FORBIDDEN_DIRS.intersection(path.parts):
+    if FORBIDDEN_DIRS.intersection(path.parts) or ("docs", "internal") in zip(path.parts, path.parts[1:]):
         yield "private/research directory"
     if path.suffix.lower() in FORBIDDEN_SUFFIXES:
         yield "excluded file type"

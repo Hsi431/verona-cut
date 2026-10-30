@@ -12,6 +12,7 @@ htmlcov/
 !.env.example
 .agent/
 .codegraph/
+docs/internal/
 research/
 captures/
 dumps/
