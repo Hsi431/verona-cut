@@ -1,4 +1,4 @@
-include LICENSE README.md THIRD_PARTY_NOTICES.md .gitignore
+include LICENSE README.md README.zh-TW.md THIRD_PARTY_NOTICES.md .gitignore
 include install.sh run.sh run-en.sh run-zh-TW.sh run-desktop.sh install-desktop.sh
 recursive-include docs *.md *.png *.svg
 prune docs/internal

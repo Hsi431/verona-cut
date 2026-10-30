@@ -1,210 +1,215 @@
 # Verona
 
+**English** · [繁體中文](README.zh-TW.md)
+
 ![Verona — A native Linux home for Juliet.](docs/assets/banner.png)
 
-Verona is an independent, offline design and cutting application for **Siser Juliet**.
-Import artwork, edit paths, arrange a sheet, print at actual size and send a cut
-directly over local Wi-Fi—all from one Linux desktop application.
+An independent Linux workspace for **Siser Juliet**: import artwork, edit and
+arrange a sheet, print at actual size, and send a cut over local Wi-Fi.
+No account, subscription or cloud upload. Installation downloads dependencies;
+normal editing and cutting work offline.
 
-![Verona's English dark interface with six contour stickers, registration marks and layer controls.](docs/assets/editor-dark.png)
-
-## Why Verona?
-
-**Your cutter is on your desk. Your designs should stay there, too.**
-No accounts, no subscriptions, no cloud uploads. Once installed, Verona works
-without internet access; Wi-Fi cutting needs only a local connection to your
-machine. Your files, your tools, your workflow.
-
-**Edit and cut in one place.** This is a desktop editor with everyday drawing,
-path editing, layout and Print & Cut tools, alongside direct cutter control.
-
-**Keep the workflow focused.** Open artwork → edit and arrange → cut.
-No storefront, online asset library or background cloud synchronization.
+![Current Verona interface with document tabs, a grouped toolbar, six contour stickers, layers and post-edit controls.](docs/assets/editor-dark.png)
 
 ## Features
 
-- **Open and save `.lds` projects:** edit supported native artwork or keep an editable `.jdesign` file.
-- **Optional local MCP server:** review and apply undoable editor changes from an MCP client.
-- SVG vectors, raster artwork and PDF page import.
-- Shapes, text outlines, node and curve editing, masks, contour tracing and printed bleed.
-- Move, resize, rotate, mirror, group, align, distribute and automatically arrange artwork.
-- Multiple document tabs, undo/redo, light/dark themes, English and Traditional Chinese.
-- Desktop file opens share one workspace and reuse an already-open document's tab.
-- Collapsible inspector sections and wheel-safe dropdowns and numeric controls.
-- A **Post-edit** inspector section for batch bleed changes on existing images,
-  with undo/redo, plus a single-image mask editor; no reimport is needed.
-- Layers with selection, renaming, stacking order, visibility, locking and separate print/cut switches.
-- Explicit **Print only / Cut only / Print and cut** image import; change output later without losing the image.
-- Print & Cut registration marks, measured alignment correction, direct printing and PDF export.
-- Local `.jdesign` files, PLT export, `.lds` thumbnails and desktop file associations.
-- Wi-Fi version checks, cutter system information and bounded cut jobs; CLI dry runs without any device connection.
-- Experimental local BIN firmware transfer over Wi-Fi or Linux USB, with a background dialog and separate CLI.
-- 1–10 cutting passes per contour, with one Print & Cut registration scan per job.
+- **Artwork and paths:** import SVG vectors, raster images and PDF pages; draw
+  shapes and text outlines; edit nodes, curves, masks and traced contours.
+- **Layout and layers:** move, resize, rotate, mirror, group, align, distribute
+  and automatically arrange artwork. Control visibility, locking, stacking
+  order, printing and cutting per object.
+- **Post-edit:** adjust outer bleed and inner fill on multiple existing images,
+  extend edge colors or use a solid color, restore supported original LDS
+  bleed, and edit individual image masks without reimporting.
+- **Printing:** preview and print at 100% actual size, export PDF, configure
+  Print & Cut marks, and apply measured alignment corrections.
+- **Saved settings:** retain printer/media preferences and cut passes,
+  speed, force and tool settings in designs. Printer preferences also have
+  a local last-used fallback.
+- **Workspace:** multiple document tabs, undo/redo, collapsible inspector
+  sections, a toolbar that adapts to narrow windows, and wheel-safe dropdowns
+  and numeric fields. English/Traditional Chinese and light/dark themes.
+- **Desktop integration:** double-click designs into the existing workspace,
+  reuse tabs for already-open files, and show LDS thumbnails in supported file managers.
+- **Local tools:** a dry-run-first CLI, read-only cutter information,
+  an optional MCP editor bridge, and experimental local firmware tools.
 
-**Status: alpha.** Juliet Wi-Fi cutting and Print & Cut have been used on real
-hardware. USB-B delivery is experimental. Romeo has not been tested and is not
-currently a supported target. The work area is limited to **300 × 300 mm**;
-automatic drag-knife offset compensation is not implemented.
+## Current support
 
-**Firmware transfer is experimental; installation remains unverified on hardware.**
-Open **Help → Firmware update (experimental)…** or the matching button in
-**Send connection**. File inspection is offline; reading identity and starting
-an update are explicit actions. A format check does not establish compatibility,
-and transfer completion does not confirm installation. See
-[the firmware workflow](docs/FIRMWARE_UPDATE.md) for USB permissions, the CLI
-and current limitations. No firmware files are bundled or downloaded automatically.
+Verona is **alpha software**. The supported cutting workspace is **300 × 300 mm**.
 
-Hidden layers are excluded from printing and cutting. Locked layers still
-output normally but cannot be moved or edited until unlocked. Layer changes
-support undo/redo and are saved in the design. Print-only sheets can be
-printed or exported as PDF without registration marks.
+| Area | Status |
+| --- | --- |
+| Juliet over Wi-Fi | Cutting and Print & Cut have been used on real hardware. |
+| USB-B cutting | Experimental. |
+| Romeo | Untested; not a supported target. |
+| LDS files | Supported content can be imported; saving is experimental and official Leonardo compatibility is unverified. |
+| Camera and registration diagnostics | No verified camera-frame access or registration-failure diagnostic API. |
+| Firmware updates | Experimental transfer tools; hardware installation, compatibility and recovery remain unverified. |
 
-**Print** is available beside the import buttons and via `Ctrl+P`. The preview
-shows the sheet at actual size, the selected printer, paper, media/quality,
-resolution and copies. **Printer and media settings…** opens Qt's Linux print
-dialog for driver options. Previewing and applying settings do not submit a job.
-After successful submission, Verona remembers the printer and its media/quality
-options locally and includes them when saving either `.jdesign` or `.lds`.
-Saved document preferences take priority over the last-used settings; paper
-dimensions and orientation always follow the design. A missing printer falls
-back to the current default, with a notice in the preview.
+Automatic drag-knife offset compensation is not implemented. A successful
+transfer does not confirm physical cutting completion.
 
-Native LDS image bleed settings are imported as editable outer and inner bleed
-in millimetres, using the image's scale and saved bleed color. Earlier Verona
-versions skipped these settings. If such a file was already saved in Verona,
-the original `.lds.bak` retains the native data. Select multiple images and open
-**Post-edit → Add / adjust bleed…** to apply a shared setting, or **Remove bleed**
-to remove the editable bleed layer. Original pixels and cut paths are retained.
-**Restore original bleed** recovers settings from the matching `.lds.bak`, or
-lets you choose the original LDS/backup after saving as `.jdesign`. It preserves
-current layer edits and requires matching image placement, masks and cut paths;
-the recovery is undoable and does not overwrite either source file.
+## Install
 
-**LDS saving is experimental.** Use **Save** to write back to an opened `.lds`,
-or **Save design as…** (`Ctrl+Shift+S`) to choose `.jdesign` or `.lds`.
-The first overwrite preserves the original as `<filename>.lds.bak`.
-Verona retains its complete editing data alongside native print/cut output.
-Printed vectors and bleed are rasterized at 300 DPI in the native output;
-their original sources remain editable in Verona. Other applications may
-ignore the extra editing data. Official Leonardo compatibility is unverified.
+Requires **Linux and Python 3.11+**. On Ubuntu/Mint, install missing system libraries:
 
-## Install and open
+~~~bash
+sudo apt install git python3-venv libxcb-cursor0 libegl1 libopengl0 libxkbcommon0 libfontconfig1
 
-Requires Linux and Python 3.11 or newer. On Ubuntu/Mint X11, install the
-system dependencies if missing:
-
-```bash
-sudo apt install git python3-venv libxcb-cursor0 libegl1 libopengl0
-```
-
-Download, install and open:
-
-```bash
 git clone https://github.com/Hsi431/verona-cut.git
 cd verona-cut
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install .
 verona
-```
+~~~
 
-Dependencies are downloaded during installation; normal editing and cutting
-do not use an online service.
+Choose **Language** and **Appearance** from the menu, or launch directly in a language:
 
-Choose **Language** and **Appearance** from the menu. Enter the IPv4 address
-shown on the cutter in the Wi-Fi panel and use **Check connection** before
-sending a job. The address is remembered locally. You can also launch with:
+~~~bash
+verona --lang en
+verona --lang zh_TW
+~~~
 
-```bash
-verona --lang en --host "$VERONA_HOST" --open examples/pen-calibration.jdesign
-```
+To enable desktop launchers, file associations and LDS thumbnails:
 
-`VERONA_HOST` optionally sets the cutter address; `--host` overrides it.
-`--port` selects a different TCP port (default: 8080). There is no LAN scanning.
-Connection checks query the version; they do not confirm that the machine is
-idle or that material is loaded.
+~~~bash
+verona-desktop
+~~~
 
-To open `.jdesign` and `.lds` files by double-clicking and enable `.lds`
-thumbnails, run `verona-desktop`.
-This changes only the current user's desktop configuration. Restart your
-file manager after the first installation to reload thumbnailers. Thumbnail
-support depends on the file manager; it has been verified with Nemo.
+This configures only the current user. Restart the file manager after the
+first installation to reload thumbnailers; thumbnail support has been verified
+with Nemo. Opening files through the desktop or `verona --open <file>` shares
+the existing workspace.
 
-## CLI
+### Update an existing installation
 
-```bash
-# Enter your cutter's address from its screen; keep it out of shared files.
+Save your work and close Verona, then run from the repository:
+
+~~~bash
+git pull --ff-only
+. .venv/bin/activate
+python -m pip install .
+verona
+~~~
+
+Reinstalling is required after pulling changes when installed with `pip install .`.
+
+## Everyday workflow
+
+1. **Open or import.** Open `.lds` or `.jdesign` in a tab, or import artwork.
+   Images can be **Print only**, **Cut only**, or **Print and cut**; change their
+   output later while retaining the source image.
+2. **Edit and arrange.** Adjust paths and layers, arrange copies, or select
+   existing images and use **Post-edit → Add / adjust bleed…**.
+3. **Set up the sheet.** Choose paper dimensions and, for Print & Cut, matching
+   registration marks. Print-only sheets do not require registration marks.
+4. **Print.** Use the toolbar button beside the import controls or `Ctrl+P`.
+   Verona provides the preview; **Printer and media settings…** opens Qt's
+   Linux print dialog with the installed printer driver's options.
+5. **Review and cut.** Enter the cutter's displayed IPv4 address under
+   **Connection**, check the connection, review tool/force/speed and
+   **Cut passes** (1–10), then explicitly send the job.
+
+Previewing or changing print settings does not submit a job. After successful
+submission, printer/media preferences are remembered locally and included when
+the design is saved. Saved document preferences take priority; paper dimensions
+and orientation follow the design. An unavailable saved printer produces a notice.
+
+Hidden layers are excluded from print and cut output; locked layers still
+output but cannot be edited. Cuts are checked against the workspace and active
+registration frame. Failed transfers are never automatically replayed.
+A connection check reads a version; it does not establish machine readiness.
+
+For a first cut, remove the blade holder or use a pen. Secure the material,
+clear the travel area and choose force/speed for the material. Verona has no
+verified remote emergency-stop command.
+
+## Design files and settings
+
+- **`.jdesign`:** Verona's editable design format.
+- **`.lds`:** supported native artwork plus Verona editing data when saved.
+  **Save design as…** (`Ctrl+Shift+S`) offers both formats. The first overwrite
+  of an existing LDS preserves its original as `<filename>.lds.bak`.
+- **Preferences:** print options, cut settings and layer state survive
+  save/reopen in Verona. Other LDS readers may ignore Verona-specific data.
+- **Native print output:** printed vector styles and bleed are rasterized at
+  300 DPI in LDS output; their original sources stay editable in Verona.
+
+Supported native LDS bleed is imported in millimetres. If an earlier Verona
+save lost it, **Post-edit → Restore original bleed** can recover matching
+settings from the original LDS or its backup. Recovery is undoable and retains
+current artwork and layer edits. See [native bleed details](docs/NATIVE_BLEED.md).
+
+## Command line
+
+The CLI can validate and export a job without connecting to a cutter:
+
+~~~bash
+verona-cut cut examples/pen-calibration.jdesign --dry-run --output preview.plt
+~~~
+
+For read-only checks and an explicitly authorized cut:
+
+~~~bash
 read -r -p 'Cutter IPv4 address: ' VERONA_HOST
 export VERONA_HOST
-
-# Read-only version query. No head movement or cut job.
 verona-cut status --host "$VERONA_HOST"
-
-# Read additional identity fields, omitting per-device identifiers.
 verona-cut status --host "$VERONA_HOST" --details
 
-# Validate and export a small pen job. No connection to any hardware.
-verona-cut cut examples/pen-calibration.jdesign --dry-run --output preview.plt
-
-# After checking the setup and loading a pen, explicitly send the job once.
+# Load a pen, check the setup, then send once.
 verona-cut cut examples/pen-calibration.jdesign --host "$VERONA_HOST" --send
-```
+~~~
 
-`cut` defaults to a dry run. It accepts `.jdesign` or plain path-based `.svg`
-files, never arbitrary PLT commands. `--force 1..160`, `--speed 1..13` and
-`--tool pen|blade` override job settings; these are machine setting values,
-not material recommendations. Omitting force/speed preserves saved settings
-or the machine's settings. Read the dry-run summary before sending.
+`cut` defaults to a dry run and accepts `.jdesign` or plain path-based SVG,
+not arbitrary PLT input. Overrides: `--passes 1..10`, `--force 1..160`,
+`--speed 1..13`, `--tool pen|blade`. These are machine settings, not material
+recommendations. Each contour repeats before the next; Print & Cut registration
+runs once per job. Omitting overrides preserves saved settings or the applicable
+machine defaults.
 
-`--passes 1..10` overrides the saved pass count (older designs default to 1).
-Each contour is repeated before the next, with a raised return to its start.
-The GUI exposes **Cut passes** independently of force/speed overrides and
-includes the count in the send confirmation. Saving retains it in both design
-formats in Verona; other LDS readers may ignore this setting.
-See [Wi-Fi diagnostics](docs/WIFI_DIAGNOSTICS.md) for identity-query
-details and the current camera/firmware boundaries.
+The GUI and CLI accept `VERONA_HOST`; `--host` overrides it. TCP defaults to
+port 8080, configurable with `--port`. There is no LAN scanning.
 
-All job paths are checked against the work area and, when enabled, the
-registration frame. Failed transfers are never automatically replayed.
-“Delivered” means bytes were accepted by the local transport, **not** that
-the physical cut completed. See [the protocol reference](docs/PROTOCOL.md).
+## Experimental firmware tools
 
-## Safety
+Open **Help → Firmware update (experimental)…**, or inspect a local file offline:
 
-For first tests, **remove the blade holder** and run an air cut or use a pen.
-Secure the mat/material, clear the travel area and keep your hand near the
-power button. Software bounds checks cannot detect an incorrect physical
-origin, an obstruction or the wrong tool. Set force and speed for your material.
-Verona does not provide a verified remote emergency-stop command.
+~~~bash
+verona-firmware inspect ./firmware.bin
+~~~
 
-## Development
+Verona does not bundle or automatically download firmware. Format checks do
+not establish hardware compatibility, and a completed transfer does not prove
+installation. GUI attempts have local history with failure stages and known
+byte counts. Read [the firmware workflow](docs/FIRMWARE_UPDATE.md) before use.
 
-![Verona architecture: artwork enters the desktop editor; the GUI, CLI and optional MCP share a validated job builder, with local print/PDF output and explicit cutter transport.](docs/assets/architecture.svg)
+## Development and documentation
 
-```bash
+From the activated virtual environment:
+
+~~~bash
 python -m pip install -e '.[mcp]'
 QT_QPA_PLATFORM=offscreen python -m unittest discover -s tests -v
 python scripts/check-release.py
-```
+~~~
 
-Tests use synthetic fixtures, mocks and local sockets; they do not contact
-a cutter or submit real print jobs. The optional MCP service runs with
-`verona-mcp`; its tools are described in the packaged
-[operating guide](src/verona/agent-guide.md).
+Tests use synthetic fixtures, mocks and local sockets; they do not operate
+a cutter or submit real print jobs. Run the optional local MCP service with
+`verona-mcp`; see the [operating guide](src/verona/agent-guide.md).
 
-[Architecture](docs/ARCHITECTURE.md) · [Release workflow](docs/RELEASING.md)
+[Architecture](docs/ARCHITECTURE.md) · [Protocol](docs/PROTOCOL.md) ·
+[Wi-Fi diagnostics](docs/WIFI_DIAGNOSTICS.md) · [Release workflow](docs/RELEASING.md)
 
-Verona's source code is licensed under the [MIT License](LICENSE).
-Dependencies retain their [own licenses](THIRD_PARTY_NOTICES.md).
+## License and project status
 
-## Disclaimer
+Source code: [MIT](LICENSE). Dependencies retain their
+[own licenses](THIRD_PARTY_NOTICES.md).
 
-Verona is an independent, unofficial project for interoperability on Linux.
-It is not affiliated with, endorsed by or supported by Siser S.r.l. or
-Siser North America, Inc. Siser, Juliet, Romeo and Leonardo Design Studio
-are trademarks of their respective owners, used here only to identify
-compatibility.
-
-Use at your own risk. The authors and contributors accept no responsibility
-for hardware damage, voided warranties, ruined materials or personal injury.
-Always test without a blade first and keep your hand near the power button.
+Verona is an independent, unofficial interoperability project. It is not
+affiliated with, endorsed by or supported by Siser S.r.l. or Siser North America,
+Inc. Siser, Juliet, Romeo and Leonardo Design Studio are trademarks of their
+respective owners. Use at your own risk; the authors and contributors accept
+no responsibility for hardware damage, voided warranties, ruined materials
+or personal injury.
