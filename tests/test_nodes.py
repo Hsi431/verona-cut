@@ -16,6 +16,7 @@ from PySide6.QtWidgets import QApplication, QDialog
 from verona.commands import encode_document
 from verona.editor_actions import build_edit
 from verona.editor_document import build_document_edit
+from verona.i18n import get_language, set_language
 from verona.node_editor import NodeEditorDialog
 from verona.nodes import (editable_path, edit_path, flatten_path, insert_node,
                                 move_node, validate_saved_paths)
@@ -62,6 +63,17 @@ class NodeTests(unittest.TestCase):
             self.assertEqual(len(rebuilt), 1)
         finally:
             dialog.deleteLater()
+
+    def test_node_gesture_help_is_available_on_the_canvas(self):
+        self.addCleanup(set_language, get_language())
+        for language, arrows, zoom in (("en", "Arrow keys", "scroll to zoom"),
+                                       ("zh_TW", "方向鍵", "滾輪縮放")):
+            with self.subTest(language=language):
+                set_language(language)
+                dialog = NodeEditorDialog(rectangle())
+                self.assertIn(arrows, dialog.canvas.toolTip())
+                self.assertIn(zoom, dialog.canvas.toolTip())
+                dialog.close()
 
     def test_cubic_flatten_split_and_move_keep_shape_and_handles(self):
         path = curved()

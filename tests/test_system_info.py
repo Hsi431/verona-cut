@@ -216,7 +216,9 @@ class SystemInfoTests(unittest.TestCase):
         self.assertEqual(dialog.copy_button.text(), "Copy information")
         self.assertEqual(dialog.palette().color(QPalette.ColorRole.WindowText), QColor(THEMES["dark"]["text"]))
         texts = [label.text() for label in dialog.findChildren(QLabel)]
+        self.assertNotIn("Cutter information", texts)
         self.assertIn("Firmware version", texts)
+        self.assertTrue(dialog.refresh_button.toolTip())
         with patch("verona.system_info.QApplication.clipboard") as clipboard:
             dialog.copy_info()
         self.assertIn("Firmware version: V22.0613", clipboard.return_value.setText.call_args.args[0])

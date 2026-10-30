@@ -133,6 +133,17 @@ class RasterImportTests(unittest.TestCase):
         painter.end()
         return image
 
+    def test_color_summary_only_appears_when_selected_colors_are_relevant(self):
+        dialog = ImportImageDialog(self._transparent_donut(), "donut")
+        self.assertTrue(dialog.color_summary.isHidden())
+        dialog.foreground_colors = ["#ff0000"]
+        dialog.mask_mode_combo.setCurrentIndex(dialog.mask_mode_combo.findData("colors"))
+        self.assertFalse(dialog.color_summary.isHidden())
+        self.assertEqual(dialog.color_summary.text(), "#ff0000")
+        dialog.mask_mode_combo.setCurrentIndex(dialog.mask_mode_combo.findData("background"))
+        self.assertTrue(dialog.color_summary.isHidden())
+        dialog.close()
+
     def test_import_dialog_retraces_the_mask_only_for_mask_options(self):
         dialog = ImportImageDialog(self._transparent_donut(), "donut")
         reference = raster_import.build_raster_items(

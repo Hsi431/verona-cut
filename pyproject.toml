@@ -31,6 +31,7 @@ mcp = ["mcp==2.3.0"]
 [project.scripts]
 verona = "verona.ui:main"
 verona-cut = "verona.cli:main"
+verona-firmware = "verona.firmware_cli:main"
 verona-mcp = "verona.mcp_server:main"
 verona-desktop = "verona.desktop_integration:main"
 

@@ -8,7 +8,7 @@ THEMES = {
     "light": {
         "background": "#f2f5f2", "surface": "#ffffff", "text": "#202b30",
         "input": "#fffefa", "border": "#d6dfda", "panel_border": "#dbe3df",
-        "muted": "#718086", "disabled": "#899795", "hover": "#f3faf7",
+        "muted": "#586a70", "disabled": "#899795", "hover": "#f3faf7",
         "accent": "#087e72", "primary": "#087e72", "primary_hover": "#076c62",
         "selection": "#087e72", "selection_text": "#ffffff",
         "warning_text": "#9c1c29", "warning_background": "#fff0f1", "warning_border": "#ebc0c5",
@@ -46,7 +46,9 @@ def stylesheet(c):
     return f"""
         QMainWindow, QWidget {{ background: {c['background']}; color: {c['text']}; }}
         QLabel {{ background: transparent; }}
-        QFrame#header, QFrame#inspector, QFrame#layers {{ background: {c['surface']}; border: 1px solid {c['panel_border']}; border-radius: 10px; }}
+        QFrame#inspector, QFrame#layers {{ background: {c['surface']}; border: 0; }}
+        QToolBar#designTools {{ background: transparent; border: 0; spacing: 6px; padding: 0; }}
+        QToolBar#designTools::separator {{ background: {c['separator']}; width: 1px; margin: 4px 6px; }}
         QTreeView {{ background: {c['input']}; border: 1px solid {c['border']}; border-radius: 6px; selection-background-color: {c['selection']}; selection-color: {c['selection_text']}; }}
         QTreeView::item {{ min-height: 26px; }}
         QHeaderView::section {{ background: {c['surface']}; color: {c['muted']}; border: 0; padding: 4px; }}
@@ -54,6 +56,9 @@ def stylesheet(c):
         QToolButton:hover, QPushButton:hover {{ border-color: {c['accent']}; background: {c['hover']}; }}
         QToolButton:checked {{ background: {c['selection']}; color: {c['selection_text']}; border-color: {c['accent']}; }}
         QToolButton:focus, QPushButton:focus {{ border-color: {c['accent']}; }}
+        QToolButton#sectionToggle {{ color: {c['text']}; background: transparent; border: 0; border-radius: 4px; padding: 7px 2px; text-align: left; font-weight: 600; }}
+        QToolButton#sectionToggle:hover {{ background: {c['hover']}; }}
+        QToolButton#sectionToggle:focus {{ outline: 1px solid {c['accent']}; }}
         QPushButton#primary {{ color: white; background: {c['primary']}; border-color: {c['primary']}; font-weight: 600; padding: 7px; }}
         QPushButton#primary:hover {{ background: {c['primary_hover']}; }}
         QToolButton:disabled, QPushButton:disabled, QPushButton#primary:disabled {{ color: {c['disabled']}; background: {c['surface']}; border-color: {c['border']}; }}
@@ -68,7 +73,6 @@ def stylesheet(c):
         QMenu::item:disabled {{ color: {c['disabled']}; }}
         QMenu::separator {{ height: 1px; background: {c['separator']}; margin: 4px; }}
         QToolTip {{ background: {c['surface']}; color: {c['text']}; border: 1px solid {c['border']}; }}
-        QLabel#eyebrow {{ color: {c['muted']}; font-size: 11px; font-weight: 600; }}
         QLabel#title {{ font-size: 18px; font-weight: 650; }}
         QLabel#muted {{ color: {c['muted']}; }}
         QLabel#boundsWarning {{ color: {c['warning_text']}; background: {c['warning_background']}; border: 1px solid {c['warning_border']}; border-radius: 7px; padding: 8px; }}

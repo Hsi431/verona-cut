@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QObject, Qt, Signal
-from PySide6.QtWidgets import QApplication, QAbstractScrollArea, QAbstractSpinBox, QComboBox, QDoubleSpinBox, QSpinBox, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QAbstractScrollArea, QAbstractSpinBox, QComboBox, QDoubleSpinBox, QSpinBox, QToolButton, QVBoxLayout, QWidget, QSizePolicy
 
 
 class WheelGuard(QObject):
@@ -46,6 +46,8 @@ class CollapsibleSection(QWidget):
         self._title = title
         self._content = content
         self._toggle = QToolButton(self)
+        self._toggle.setObjectName("sectionToggle")
+        self._toggle.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._toggle.setText(title)
         self._toggle.setCheckable(True)
         self._toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)

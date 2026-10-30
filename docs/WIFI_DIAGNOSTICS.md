@@ -53,4 +53,7 @@ Wi-Fi update path, not that a particular BIN fits a particular board or fixes
 registration. The current device's `SS12`, `PGSR_SSA` and version strings alone
 do not establish an update's compatibility. A matching build, documented
 recovery procedure and retained calibration/settings are still required
-before choosing an update. Verona does not expose a firmware-update command.
+before choosing an update. Verona now has an experimental local-BIN dialog and
+`verona-firmware` CLI; see [Firmware updates](FIRMWARE_UPDATE.md). Firmware
+installation and recovery remain unverified. No firmware-update MCP tool is
+exposed.

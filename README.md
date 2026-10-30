@@ -38,12 +38,21 @@ No storefront, online asset library or background cloud synchronization.
 - Print & Cut registration marks, measured alignment correction, direct printing and PDF export.
 - Local `.jdesign` files, PLT export, `.lds` thumbnails and desktop file associations.
 - Wi-Fi version checks, cutter system information and bounded cut jobs; CLI dry runs without any device connection.
+- Experimental local BIN firmware transfer over Wi-Fi or Linux USB, with a background dialog and separate CLI.
 - 1–10 cutting passes per contour, with one Print & Cut registration scan per job.
 
 **Status: alpha.** Juliet Wi-Fi cutting and Print & Cut have been used on real
 hardware. USB-B delivery is experimental. Romeo has not been tested and is not
 currently a supported target. The work area is limited to **300 × 300 mm**;
 automatic drag-knife offset compensation is not implemented.
+
+**Firmware transfer is experimental; installation remains unverified on hardware.**
+Open **Help → Firmware update (experimental)…** or the matching button in
+**Send connection**. File inspection is offline; reading identity and starting
+an update are explicit actions. A format check does not establish compatibility,
+and transfer completion does not confirm installation. See
+[the firmware workflow](docs/FIRMWARE_UPDATE.md) for USB permissions, the CLI
+and current limitations. No firmware files are bundled or downloaded automatically.
 
 Hidden layers are excluded from printing and cutting. Locked layers still
 output normally but cannot be moved or edited until unlocked. Layer changes

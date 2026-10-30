@@ -558,9 +558,6 @@ class ImportImageDialog(QDialog):
         layout = QVBoxLayout(self)
         output_row = QFormLayout()
         output_row.addRow(tr("輸出用途"), self.mode_combo)
-        self.mode_help = QLabel(objectName="muted")
-        self.mode_help.setWordWrap(True)
-        output_row.addRow(self.mode_help)
         layout.addLayout(output_row)
         layout.addLayout(content, 1)
         layout.addWidget(buttons)
@@ -629,11 +626,13 @@ class ImportImageDialog(QDialog):
 
     def _update_controls(self, *_args) -> None:
         mode = self.mode_combo.currentData()
-        self.mode_help.setText(tr({
+        mode_help = tr({
             "background": "只列印圖片，不產生切割工作；加入後仍可修改輸出用途。",
             "cut_only": "只輸出切線，圖片不列印；原始圖片會保留以便日後修改。",
             "print_cut": "列印圖片並使用定位標記切割輪廓。",
-        }[mode]))
+        }[mode])
+        self.mode_combo.setToolTip(mode_help)
+        self.mode_combo.setAccessibleDescription(mode_help)
         tracing = mode != "background"
         for control in (self.mask_mode_combo, self.invert_check, self.holes_check,
                         self.smoothing_spin, self.minimum_area, self.offset_spin,
@@ -646,6 +645,7 @@ class ImportImageDialog(QDialog):
         self.add_color_button.setEnabled(foreground and len(self.foreground_colors) < 16)
         self.clear_colors_button.setEnabled(foreground and bool(self.foreground_colors))
         self.color_summary.setText(", ".join(self.foreground_colors))
+        self.color_summary.setVisible(foreground and bool(self.foreground_colors))
         self.color_summary.setWordWrap(True)
         is_print = self.mode_combo.currentData() == "print_cut"
         self.bleed_spin.setEnabled(is_print)

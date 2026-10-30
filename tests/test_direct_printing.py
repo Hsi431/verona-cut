@@ -151,8 +151,8 @@ class DirectPrintingTests(unittest.TestCase):
             set_language(language)
             window = self.window()
             before = copy.deepcopy(window._snapshot())
-            for calibration in (False, True):
-                with self.subTest(language=language, calibration=calibration), \
+            for calibration, toolbar in ((False, False), (False, True), (True, False), (True, True)):
+                with self.subTest(language=language, calibration=calibration, toolbar=toolbar), \
                         patch.object(QPrinterInfo, "availablePrinters", return_value=[MagicMock()]), \
                         patch("PySide6.QtPrintSupport.QPrinter") as printer_class, \
                         patch("verona.print_dialog.PrintDialog") as dialog_class, \
@@ -162,10 +162,14 @@ class DirectPrintingTests(unittest.TestCase):
                     dialog_class.return_value.exec.return_value = QDialog.DialogCode.Accepted
                     if calibration:
                         window.metadata["source_format"] = "calibration"
-                    actions = [a for a in window.findChildren(QAction) if a.text() == label]
+                    actions = [a for a in window.findChildren(QAction)
+                               if a.text() == label and a.shortcut().toString() == "Ctrl+P"]
                     self.assertEqual(len(actions), 1)
-                    self.assertEqual(actions[0].shortcut().toString(), "Ctrl+P")
-                    actions[0].trigger()
+                    if toolbar:
+                        self.assertEqual(window.print_button.text(), label)
+                        window.print_button.click()
+                    else:
+                        actions[0].trigger()
                     submit.assert_called_once_with(printer_class.return_value, window.items,
                                                    window.metadata, calibration=calibration)
                     self.assertIn("Test printer", window.status_label.text())

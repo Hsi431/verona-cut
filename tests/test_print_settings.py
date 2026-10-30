@@ -11,7 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QSettings, QSizeF
 from PySide6.QtGui import QPageSize
 from PySide6.QtPrintSupport import QPrinter
-from PySide6.QtWidgets import QApplication, QDialog
+from PySide6.QtWidgets import QApplication, QDialog, QLabel, QPushButton
 
 from verona.print_dialog import (
     PrintDialog, _CUPS_OPTIONS, apply_printer_settings, printer_settings, validate_printer_settings,
@@ -81,6 +81,19 @@ class PrintSettingsTests(unittest.TestCase):
         self.assertTrue(dialog.error.text())
         self.assertFalse(Path(printer.outputFileName()).exists())
         dialog.hide()
+
+    def test_print_dialog_keeps_scale_warning_without_duplicate_intro(self):
+        dialog = PrintDialog(self.printer(), self.items, self.metadata)
+        self.addCleanup(dialog.deleteLater)
+        texts = [label.text() for label in dialog.findChildren(QLabel)]
+        self.assertTrue(any(text in texts for text in ("100% 原尺寸 · 不縮放",
+                                                        "100% actual size · No scaling")))
+        self.assertNotIn("Print preview", texts)
+        self.assertNotIn("Check the paper and artwork before printing. Settings are saved with the design.", texts)
+        settings = next(button for button in dialog.findChildren(QPushButton)
+                        if button.text() in ("印表機與紙材設定…", "Printer and media settings…"))
+        self.assertIn(settings.toolTip(), ("設定會隨目前設計儲存。",
+                                          "Settings are saved with the current design."))
 
     def test_native_settings_accept_and_cancel_never_submit_jobs(self):
         printer = self.printer()

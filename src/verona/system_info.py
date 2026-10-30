@@ -1,8 +1,7 @@
 """Read-only cutter identity dialog using the editor's background dispatcher."""
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QApplication, QDialog, QDialogButtonBox, QFormLayout, QFrame,
-    QLabel, QVBoxLayout,
+    QApplication, QDialog, QDialogButtonBox, QFormLayout, QLabel, QVBoxLayout,
 )
 
 from . import transport
@@ -29,51 +28,42 @@ class SystemInfoDialog(QDialog):
         self._closed = self._busy = False
         self.info = None
         self.setWindowTitle(tr("系統資訊"))
-        self.resize(520, 470)
+        self.resize(520, 390)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(12)
-        title = QLabel(tr("切割機資訊"), objectName="title")
-        layout.addWidget(title)
+        layout.setSpacing(8)
         self.endpoint = QLabel(tr("Wi‑Fi {host}:{port}", host=self.host, port=self.port)
                                if self.host else tr("尚未設定 Wi-Fi 位址"), objectName="muted")
         self.endpoint.setTextFormat(Qt.TextFormat.PlainText)
         self.endpoint.setWordWrap(True)
         layout.addWidget(self.endpoint)
         self.values = {}
-        for index, fields in enumerate((_FIELDS[:3], _FIELDS[3:])):
-            if index:
-                separator = QFrame(objectName="separator")
-                separator.setFrameShape(QFrame.Shape.HLine)
-                layout.addWidget(separator)
-                note = QLabel(tr("以下欄位顯示機器原值，用途尚未完全確認。"), objectName="muted")
-                note.setWordWrap(True)
-                layout.addWidget(note)
-            form = QFormLayout()
-            form.setHorizontalSpacing(20)
-            form.setVerticalSpacing(10)
-            for key, label in fields:
-                value = QLabel("—")
-                value.setTextFormat(Qt.TextFormat.PlainText)
-                value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse
-                                              | Qt.TextInteractionFlag.TextSelectableByKeyboard)
-                value.setWordWrap(True)
-                form.addRow(tr(label), value)
-                self.values[key] = value
-            layout.addLayout(form)
+        form = QFormLayout()
+        form.setHorizontalSpacing(20)
+        form.setVerticalSpacing(8)
+        for key, label in _FIELDS:
+            field_label = QLabel(tr(label))
+            if key in {"bs_version", "date_code", "program_header"}:
+                field_label.setToolTip(tr("此欄位為機器回報原值，含義尚未確認。"))
+            value = QLabel("—")
+            value.setTextFormat(Qt.TextFormat.PlainText)
+            value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse
+                                          | Qt.TextInteractionFlag.TextSelectableByKeyboard)
+            value.setWordWrap(True)
+            form.addRow(field_label, value)
+            self.values[key] = value
+        layout.addLayout(form)
         layout.addStretch()
         self.status = QLabel(objectName="muted")
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
-        note = QLabel(tr("查詢不會移動機器；回覆不代表機器閒置或裁切完成。\n"
-                         "複製內容不含 IP 位址與裝置識別資料。"), objectName="muted")
-        note.setWordWrap(True)
-        layout.addWidget(note)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         self.refresh_button = buttons.addButton(tr("重新讀取"), QDialogButtonBox.ButtonRole.ActionRole)
+        self.refresh_button.setToolTip(tr("只讀取資訊；不會移動機器，也不能確認機器閒置或裁切完成。"))
         self.refresh_button.clicked.connect(self.refresh)
         self.copy_button = buttons.addButton(tr("複製資訊"), QDialogButtonBox.ButtonRole.ActionRole)
+        self.copy_button.setToolTip(tr("複製內容會排除 IP 位址與裝置識別資料。"))
         self.copy_button.setEnabled(False)
         self.copy_button.clicked.connect(self.copy_info)
         buttons.button(QDialogButtonBox.StandardButton.Close).setText(tr("關閉"))

@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QColorDialog, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
     QFormLayout, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
     QInputDialog, QMainWindow, QMenu, QMessageBox, QPushButton, QScrollArea,
-    QSpinBox, QDoubleSpinBox, QSplitter, QToolButton, QVBoxLayout, QWidget, QTabBar,
+    QSpinBox, QDoubleSpinBox, QSplitter, QToolBar, QToolButton, QVBoxLayout, QWidget, QTabBar, QSizePolicy,
 )
 from .i18n import get_language, set_language, tr
 from .transport import TCP_PORT
@@ -677,7 +677,8 @@ class PreviewDialog(QDialog):
         scroll.setWidget(canvas)
         scroll.setWidgetResizable(False)
         layout.addWidget(scroll, 1)
-        layout.addWidget(QLabel(tr("實線為刀具落下路徑；虛線為抬刀移動路徑。")))
+        canvas.setToolTip(tr("實線為刀具落下路徑；虛線為抬刀移動路徑。"))
+        layout.addWidget(QLabel(tr("實線：切割 · 虛線：移動")))
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.button(QDialogButtonBox.StandardButton.Close).setText(tr("關閉"))
         buttons.rejected.connect(self.reject)
@@ -707,6 +708,7 @@ class BleedDialog(QDialog):
         self.color_button = QPushButton(tr("出血顏色…"))
         self.color_button.clicked.connect(self.choose_color)
         preview_button = QPushButton(tr("預覽"))
+        preview_button.setToolTip(tr("按預覽檢查出血；內側補色會覆蓋邊緣圖案，不移動切線。"))
         preview_button.clicked.connect(self.preview)
         form = QFormLayout()
         form.addRow(tr("出血方式"), self.mode_combo)
@@ -716,20 +718,20 @@ class BleedDialog(QDialog):
         self.mode_combo.currentIndexChanged.connect(self._update_mode)
         self.inner_spin.valueChanged.connect(self._update_mode)
         self._update_mode()
-        self.preview_label = QLabel(tr("按預覽檢查出血；內側補色會覆蓋邊緣圖案，不移動切線。"))
+        self.inner_spin.setToolTip(tr("內側補色會覆蓋邊緣圖案，不移動切線。"))
+        self.preview_label = QLabel(tr("尚未預覽"))
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_label.setWordWrap(True)
         self.preview_label.setMinimumSize(360, 360)
         self.directory = QTemporaryDir()
         layout = QVBoxLayout(self)
-        if len(indices) > 1:
-            layout.addWidget(QLabel(tr("套用至所選的 {count} 張圖片", count=len(indices))))
         layout.addLayout(form)
         layout.addWidget(self.preview_label)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText(tr("套用"))
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText(
+            tr("套用至 {count} 張圖片", count=len(indices)) if len(indices) > 1 else tr("套用"))
         buttons.button(QDialogButtonBox.StandardButton.Cancel).setText(tr("取消"))
         layout.addWidget(buttons)
 
@@ -782,13 +784,15 @@ class PackingDialog(QDialog):
         form.addRow(self.shape_check)
         form.addRow(self.fill_check)
         preview = QPushButton(tr("預覽"))
+        preview.setToolTip(tr("先預覽排版，再套用；圖案維持原尺寸。"))
         preview.clicked.connect(self.preview)
-        self.preview_label = QLabel(tr("先預覽排版，再套用；圖案維持原尺寸。"))
+        self.preview_label = QLabel(tr("尚未預覽"))
         self.preview_label.setMinimumSize(360, 360)
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_label.setWordWrap(True)
         self.summary = QLabel()
         self.summary.setWordWrap(True)
+        self.summary.hide()
         self.directory = QTemporaryDir()
         layout = QVBoxLayout(self)
         layout.addLayout(form)
@@ -812,6 +816,7 @@ class PackingDialog(QDialog):
         self.plan = None
         self.apply_button.setEnabled(False)
         self.summary.setText(tr("設定已變更，請重新預覽。"))
+        self.summary.show()
 
     def build_items(self):
         from .packing import pack_items
@@ -836,6 +841,7 @@ class PackingDialog(QDialog):
             if details["limit_reached"]:
                 text += " " + tr("已達本次排版上限。")
             self.summary.setText(text)
+            self.summary.show()
             self.apply_button.setEnabled(True)
         except (ValueError, OSError) as error:
             self.apply_button.setEnabled(False)
@@ -996,32 +1002,24 @@ class VeronaWindow(QMainWindow):
         outer.setContentsMargins(16, 14, 16, 12)
         outer.setSpacing(12)
 
-        header = QFrame(objectName="header")
-        header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(16, 10, 16, 10)
-        brand = QVBoxLayout()
-        brand.setSpacing(1)
-        brand.addWidget(QLabel(tr("Verona  /  Linux 工作區"), objectName="eyebrow"))
-        brand.addWidget(QLabel(tr("Verona"), objectName="title"))
-        header_layout.addLayout(brand)
-        header_layout.addStretch(1)
-        self.file_label = QLabel(tr("未命名設計"))
-        self.file_label.setObjectName("muted")
-        header_layout.addWidget(self.file_label)
-        outer.addWidget(header)
-
-        actions = QHBoxLayout()
-        actions.setSpacing(7)
+        actions = QToolBar(tr("設計工具"), self)
+        actions.setObjectName("designTools")
+        actions.setMovable(False)
+        actions.setFloatable(False)
+        actions.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.design_toolbar = actions
         self._tool(actions, tr("新增設計"), self.new_design)
         self._tool(actions, tr("匯入 SVG"), self.import_svg)
         self._tool(actions, tr("匯入圖片"), self.import_image)
         self.print_button = self._tool(actions, tr("列印…"), self.print_design)
+        actions.addSeparator()
         self._tool(actions, tr("矩形"), self.add_rectangle)
         self._tool(actions, tr("圓形"), self.add_ellipse)
         self._tool(actions, tr("文字輪廓"), self.add_text)
+        actions.addSeparator()
         self._tool(actions, tr("複製"), self.duplicate_selected)
         self._tool(actions, tr("刪除"), self.delete_selected)
-        actions.addSpacing(8)
+        actions.addSeparator()
         self.undo_action = QAction(tr("復原"), self)
         self.undo_action.setShortcut("Ctrl+Z")
         self.undo_action.triggered.connect(self.undo)
@@ -1034,9 +1032,11 @@ class VeronaWindow(QMainWindow):
         self.zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         actions.addWidget(self.zoom_label)
         self._tool(actions, "+", lambda: self.change_zoom(1.25))
-        actions.addStretch(1)
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        actions.addWidget(spacer)
         self._tool(actions, tr("切割預覽"), self.show_preview)
-        outer.addLayout(actions)
+        outer.addWidget(actions)
 
         self.tab_bar = QTabBar()
         self.tab_bar.setTabsClosable(True)
@@ -1124,7 +1124,6 @@ class VeronaWindow(QMainWindow):
         self.canvas_scroll.horizontalScrollBar().setValue(state["scroll"][0])
         self.canvas_scroll.verticalScrollBar().setValue(state["scroll"][1])
         self.native_preview_action.setEnabled(bool(self.metadata.get("source_preview")))
-        self.file_label.setText(Path(self.current_file).name if self.current_file else tr("未命名設計"))
         self.refresh_all()
 
     def _refresh_tab_titles(self) -> None:
@@ -1158,7 +1157,6 @@ class VeronaWindow(QMainWindow):
             self.undo_stack, self.redo_stack = [], []
             self.saved_snapshot = self._document_state()
             self.native_preview_action.setEnabled(False)
-            self.file_label.setText(tr("未命名設計"))
             self.refresh_all()
             return True
         del self._documents[index]
@@ -1167,12 +1165,11 @@ class VeronaWindow(QMainWindow):
         self._restore_tab_state(self._documents[next_index])
         return True
 
-    def _tool(self, layout: QHBoxLayout, label: str, callback: Any) -> QToolButton:
-        button = QToolButton()
-        button.setText(label)
-        button.clicked.connect(callback)
-        layout.addWidget(button)
-        return button
+    def _tool(self, toolbar: QToolBar, label: str, callback: Any) -> QToolButton:
+        action = QAction(label, toolbar)
+        action.triggered.connect(callback)
+        toolbar.addAction(action)
+        return toolbar.widgetForAction(action)
 
     def _build_inspector(self) -> QWidget:
         panel = QFrame(objectName="inspector")
@@ -1184,16 +1181,12 @@ class VeronaWindow(QMainWindow):
         path_layout = QVBoxLayout(path_content)
         path_layout.setContentsMargins(0, 4, 0, 4)
         self.path_section = CollapsibleSection(tr("路徑設定"), path_content)
+        self.path_section.setToolTip(tr("Ctrl／Shift 點選可多選；Shift 滾輪縮放。"))
         layout.addWidget(self.path_section)
-        selection_hint = QLabel(tr("Ctrl／Shift 點選可多選；Shift 滾輪縮放。"), objectName="muted")
-        selection_hint.setWordWrap(True)
-        path_layout.addWidget(selection_hint)
-
         geometry = QFormLayout()
         geometry.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
         geometry.setVerticalSpacing(4)
         self.object_name = QLineEdit()
-        self.object_name.setPlaceholderText(tr("物件名稱"))
         geometry.addRow(tr("名稱"), self.object_name)
         self.width_spin = self._mm_spin()
         self.height_spin = self._mm_spin()
@@ -1201,10 +1194,18 @@ class VeronaWindow(QMainWindow):
         self.x_spin.setRange(-PAGE_WIDTH_MM, PAGE_WIDTH_MM * 2)
         self.y_spin = self._mm_spin()
         self.y_spin.setRange(-PAGE_HEIGHT_MM, 99999)
-        geometry.addRow(tr("X 起點"), self.x_spin)
-        geometry.addRow(tr("Y 起點"), self.y_spin)
-        geometry.addRow(tr("寬度"), self.width_spin)
-        geometry.addRow(tr("高度"), self.height_spin)
+        dimensions = QGridLayout()
+        dimensions.setHorizontalSpacing(6)
+        dimensions.setVerticalSpacing(4)
+        for index, (label, control, accessible) in enumerate((
+                ("X", self.x_spin, "X 起點"), ("Y", self.y_spin, "Y 起點"),
+                ("寬度", self.width_spin, "寬度"), ("高度", self.height_spin, "高度"))):
+            name = QLabel(tr(label))
+            name.setBuddy(control)
+            control.setAccessibleName(tr(accessible))
+            dimensions.addWidget(name, index // 2, (index % 2) * 2)
+            dimensions.addWidget(control, index // 2, (index % 2) * 2 + 1)
+        geometry.addRow(dimensions)
         path_layout.addLayout(geometry)
         self.lock_ratio = QCheckBox(tr("鎖定比例"))
         self.lock_ratio.setChecked(True)
@@ -1287,10 +1288,11 @@ class VeronaWindow(QMainWindow):
         post_edit_layout.setContentsMargins(0, 4, 0, 4)
         self.post_edit_section = CollapsibleSection(tr("後編輯"), post_edit_content)
         layout.addWidget(self.post_edit_section)
-        self.post_edit_summary = QLabel(tr("選取圖片後，可批次設定出血。"), objectName="muted")
+        self.post_edit_summary = QLabel(tr("選取圖片"), objectName="muted")
         self.post_edit_summary.setWordWrap(True)
         post_edit_layout.addWidget(self.post_edit_summary)
         self.edit_bleed_button = QPushButton(tr("新增／調整出血…"))
+        self.edit_bleed_button.setToolTip(tr("出血可同時套用到多張圖片，不改動切割線。"))
         self.edit_bleed_button.clicked.connect(self.edit_selected_bleed)
         post_edit_layout.addWidget(self.edit_bleed_button)
         self.remove_bleed_button = QPushButton(tr("移除出血"))
@@ -1301,19 +1303,18 @@ class VeronaWindow(QMainWindow):
         self.restore_bleed_button.clicked.connect(self.restore_selected_native_bleed)
         post_edit_layout.addWidget(self.restore_bleed_button)
         self.edit_image_button = QPushButton(tr("編輯圖片遮罩…"))
+        self.edit_image_button.setToolTip(tr("遮罩編輯限單張圖片。"))
         self.edit_image_button.clicked.connect(self.edit_selected_image)
         post_edit_layout.addWidget(self.edit_image_button)
         for button in (self.edit_bleed_button, self.remove_bleed_button, self.restore_bleed_button, self.edit_image_button):
             button.setEnabled(False)
-        note = QLabel(tr("出血可同時套用到多張圖片，不改動切割線；遮罩編輯限單張。"), objectName="muted")
-        note.setWordWrap(True)
-        post_edit_layout.addWidget(note)
         view_content = QWidget()
         view_layout = QVBoxLayout(view_content)
         view_layout.setContentsMargins(0, 4, 0, 4)
         self.view_section = CollapsibleSection(tr("畫布顯示"), view_content)
         layout.addWidget(self.view_section)
-        self.cutline_view = QCheckBox(tr("淡化圖片並凸顯裁切線"))
+        self.cutline_view = QCheckBox(tr("凸顯裁切線"))
+        self.cutline_view.setToolTip(tr("淡化圖片並凸顯裁切線"))
         self.cutline_view.toggled.connect(self._toggle_cutline_view)
         view_layout.addWidget(self.cutline_view)
         image_view = QFormLayout()
@@ -1322,13 +1323,9 @@ class VeronaWindow(QMainWindow):
         self.image_opacity.setValue(100)
         self.image_opacity.setSuffix(" %")
         self.image_opacity.valueChanged.connect(lambda: self.canvas.update())
-        image_view.addRow(tr("圖片顯示不透明度"), self.image_opacity)
+        image_view.addRow(tr("圖片不透明度"), self.image_opacity)
         view_layout.addLayout(image_view)
 
-        separator = QFrame()
-        separator.setFrameShape(QFrame.Shape.HLine)
-        separator.setObjectName("separator")
-        layout.addWidget(separator)
         cut_content = QWidget()
         cut_layout = QVBoxLayout(cut_content)
         cut_layout.setContentsMargins(0, 4, 0, 4)
@@ -1394,9 +1391,7 @@ class VeronaWindow(QMainWindow):
         mark_style.addRow(tr("定位線寬"), self.mark_stroke)
         mark_style.addRow(tr("其餘三個角臂長"), self.mark_short_length)
         mark_layout.addLayout(mark_style)
-        mark_note = QLabel(tr("左下角臂長固定 12.5 mm；無方向三角形。"), objectName="muted")
-        mark_note.setWordWrap(True)
-        mark_layout.addWidget(mark_note)
+        self.mark_short_length.setToolTip(tr("左下角臂長固定 12.5 mm；無方向三角形。"))
         self.apply_marks_button = QPushButton(tr("套用定位標記"))
         self.apply_marks_button.clicked.connect(self.apply_mark_margins)
         mark_layout.addWidget(self.apply_marks_button)
@@ -1413,18 +1408,13 @@ class VeronaWindow(QMainWindow):
             self.registration_offsets.append(spin)
             adjustment.addRow(tr(label), spin)
         mark_layout.addLayout(adjustment)
-        offset_note = QLabel(tr("正 X 向右、正 Y 向下；請依量測結果調整。"), objectName="muted")
-        offset_note.setWordWrap(True)
-        mark_layout.addWidget(offset_note)
+        for spin in self.registration_offsets:
+            spin.setToolTip(tr("正 X 向右、正 Y 向下；請依量測結果調整。"))
         self.apply_offsets_button = QPushButton(tr("套用切割微調"))
         self.apply_offsets_button.clicked.connect(self.apply_registration_offset)
         mark_layout.addWidget(self.apply_offsets_button)
         self._sync_registration_controls()
 
-        separator = QFrame()
-        separator.setFrameShape(QFrame.Shape.HLine)
-        separator.setObjectName("separator")
-        layout.addWidget(separator)
         connection_content = QWidget()
         connection_layout = QVBoxLayout(connection_content)
         connection_layout.setContentsMargins(0, 4, 0, 4)
@@ -1466,6 +1456,9 @@ class VeronaWindow(QMainWindow):
         connection_layout.addWidget(self.usb_row)
         self.connection_mode.currentIndexChanged.connect(self._update_connection_mode)
         self._update_connection_mode()
+        self.firmware_button = QPushButton(tr("韌體更新（實驗功能）…"))
+        self.firmware_button.clicked.connect(self.show_firmware_update)
+        connection_layout.addWidget(self.firmware_button)
         for signal in (self.passes_spin.valueChanged, self.speed_spin.valueChanged,
                        self.force_spin.valueChanged, self.custom_settings.toggled,
                        self.tool_combo.currentIndexChanged):
@@ -1567,6 +1560,14 @@ class VeronaWindow(QMainWindow):
         dialog = SystemInfoDialog(self)
         try:
             dialog.refresh()
+            dialog.exec()
+        finally:
+            dialog.deleteLater()
+
+    def show_firmware_update(self) -> None:
+        from .firmware_dialog import FirmwareUpdateDialog
+        dialog = FirmwareUpdateDialog(self)
+        try:
             dialog.exec()
         finally:
             dialog.deleteLater()
@@ -1815,6 +1816,9 @@ class VeronaWindow(QMainWindow):
         self.system_info_action = QAction(tr("系統資訊…"), self)
         self.system_info_action.triggered.connect(self.show_system_info)
         help_menu.addAction(self.system_info_action)
+        self.firmware_action = QAction(tr("韌體更新（實驗功能）…"), self)
+        self.firmware_action.triggered.connect(self.show_firmware_update)
+        help_menu.addAction(self.firmware_action)
         self.refresh_properties()
 
     def canvas_context_menu(self) -> QMenu:
@@ -2330,7 +2334,6 @@ class VeronaWindow(QMainWindow):
         self.metadata = copy.deepcopy(snapshot.get("metadata", {}))
         if hasattr(self, "native_preview_action"):
             self.native_preview_action.setEnabled(bool(self.metadata.get("source_preview")))
-        self.file_label.setText(Path(self.current_file).name if self.current_file else tr("未命名設計"))
         self.refresh_all()
 
     def _set_cut_settings(self, settings: dict[str, Any]) -> None:
@@ -2385,13 +2388,14 @@ class VeronaWindow(QMainWindow):
         self.edit_image_button.setEnabled(count == 1 and len(image_indices) == 1 and not blocked)
         bleeds = [self.items[i].get("bleed", {}) for i in image_indices]
         if not bleeds:
-            summary = tr("選取圖片後，可批次設定出血。")
+            summary = tr("選取圖片")
         elif all(bleed == bleeds[0] for bleed in bleeds):
-            summary = tr("已選取 {count} 張圖片 · 外側 {outer} mm／內側 {inner} mm",
-                         count=len(bleeds), outer=f"{bleeds[0].get('width_mm', 0):.3f}",
-                         inner=f"{bleeds[0].get('inner_mm', 0):.3f}")
+            values = {"outer": f"{bleeds[0].get('width_mm', 0):.3f}",
+                      "inner": f"{bleeds[0].get('inner_mm', 0):.3f}"}
+            summary = (tr("外側 {outer}／內側 {inner} mm", **values) if len(bleeds) == 1
+                       else tr("{count} 張圖片 · 外側 {outer}／內側 {inner} mm", count=len(bleeds), **values))
         else:
-            summary = tr("已選取 {count} 張圖片 · 出血設定不同", count=len(bleeds))
+            summary = tr("{count} 張圖片 · 多種出血設定", count=len(bleeds))
         self.post_edit_summary.setText(summary)
         self.layer_panel.refresh()
         if count:
@@ -2482,6 +2486,7 @@ class VeronaWindow(QMainWindow):
             self.registration_info.setText(tr("此原生檔缺少可用的定位標記範圍。"))
         else:
             self.registration_info.setText(tr("一般切割：由機器設定原點。"))
+        self.registration_info.setVisible(bool(registration.get("enabled")))
         width, height = registration.get("paper_width", 0), registration.get("paper_height", 0)
         enabled = bool(registration.get("enabled") and bounds and width > 0 and height > 0)
         margins = ([bounds[0], bounds[1], width - bounds[2], height - bounds[3]]
@@ -2639,7 +2644,6 @@ class VeronaWindow(QMainWindow):
             self.current_file = None
             self.metadata = {}
             self.native_preview_action.setEnabled(False)
-            self.file_label.setText(Path(filename).name)
         except Exception as error:
             QMessageBox.critical(self, tr("匯入失敗"), str(error))
 
@@ -2782,7 +2786,6 @@ class VeronaWindow(QMainWindow):
         self.selection = set()
         self.undo_stack, self.redo_stack = [], []
         self.current_file = None
-        self.file_label.setText(tr("未命名設計"))
         self.saved_snapshot = self._document_state()
         self.canvas.set_zoom(DEFAULT_ZOOM)
         self.cutline_view.setChecked(False)
@@ -2942,7 +2945,6 @@ class VeronaWindow(QMainWindow):
         self.undo_stack.clear()
         self.redo_stack.clear()
         self.current_file = filename
-        self.file_label.setText(Path(filename).name)
         self.saved_snapshot = self._document_state()
         self.refresh_all()
 
@@ -3202,7 +3204,6 @@ class VeronaWindow(QMainWindow):
         finally:
             Path(temporary).unlink(missing_ok=True)
         self.current_file = filename
-        self.file_label.setText(Path(filename).name)
         self.saved_snapshot = self._document_state()
         self._refresh_tab_titles()
         if target.suffix.lower() == ".lds":

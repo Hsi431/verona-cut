@@ -70,14 +70,9 @@ class PrintDialog(QDialog):
         super().__init__(parent)
         self.printer, self.items, self.metadata = printer, items, metadata
         self.calibration = calibration
-        self.setWindowTitle(tr("列印（100% 原尺寸）"))
+        self.setWindowTitle(tr("列印"))
         self.resize(980, 720)
         outer = QVBoxLayout(self)
-        heading = QLabel(tr("列印預覽"), objectName="title")
-        outer.addWidget(heading)
-        note = QLabel(tr("確認紙材與圖稿後列印；設定會隨設計儲存。"), objectName="muted")
-        note.setWordWrap(True)
-        outer.addWidget(note)
         body = QHBoxLayout()
         self.preview = QPrintPreviewWidget(printer, self)
         self.preview.paintRequested.connect(self._paint_preview)
@@ -98,6 +93,7 @@ class PrintDialog(QDialog):
             form.addRow(tr(label), value)
         details.addLayout(form)
         settings = QPushButton(tr("印表機與紙材設定…"))
+        settings.setToolTip(tr("設定會隨目前設計儲存。"))
         settings.clicked.connect(self._configure)
         details.addWidget(settings)
         actual_size = QLabel(tr("100% 原尺寸 · 不縮放"))
