@@ -31,6 +31,33 @@ class SafeSpinBox(QSpinBox):
 class SafeDoubleSpinBox(QDoubleSpinBox):
     """A double spin box that leaves wheel scrolling to its parent."""
 
+    def __init__(self, parent=None, *, display_decimals: int | None = None) -> None:
+        super().__init__(parent)
+        self._display_decimals = display_decimals
+        self._compact_display = display_decimals is not None
+        if display_decimals is not None:
+            self.setKeyboardTracking(False)
+
+    def textFromValue(self, value: float) -> str:
+        if self._display_decimals is None:
+            return super().textFromValue(value)
+        precision = self._display_decimals if self._compact_display else self.decimals()
+        return self.locale().toString(value, "f", precision)
+
+    def focusInEvent(self, event) -> None:
+        if self._display_decimals is not None:
+            self._compact_display = False
+            text = self.prefix() + self.textFromValue(self.value()) + self.suffix()
+            self.lineEdit().setText(text)
+        super().focusInEvent(event)
+        if self._display_decimals is not None:
+            self.lineEdit().setModified(True)
+
+    def focusOutEvent(self, event) -> None:
+        if self._display_decimals is not None:
+            self._compact_display = True
+        super().focusOutEvent(event)
+
     def wheelEvent(self, event) -> None:
         event.ignore()
 
@@ -71,3 +98,6 @@ class CollapsibleSection(QWidget):
 
     def isExpanded(self) -> bool:
         return self._toggle.isChecked()
+
+    def setSummary(self, summary: str) -> None:
+        self._toggle.setText(f"{self._title} · {summary}" if summary else self._title)

@@ -202,7 +202,8 @@ class EditImageDialog(ImportImageDialog):
         self.background_color = QColor(options["background"])
         self.foreground_colors = options["colors"][:]
         for control, key in ((self.tolerance_spin, "tolerance"), (self.smoothing_spin, "smoothing"),
-                (self.minimum_area, "minimum_area_mm2"), (self.offset_spin, "offset_mm")):
+                (self.minimum_area, "minimum_area_mm2"), (self.offset_spin, "offset_mm"),
+                (self.cut_smoothing_spin, "cut_smoothing_mm")):
             control.setValue(options[key])
         for control, key in ((self.clip_check, "clip"), (self.invert_check, "inverted"),
                              (self.holes_check, "keep_holes")):
@@ -219,8 +220,8 @@ class EditImageDialog(ImportImageDialog):
         self.findChild(QDialogButtonBox).button(QDialogButtonBox.StandardButton.Ok).setText(tr("套用"))
         for control in controls:
             control.blockSignals(False)
-        self._update_controls()
         self.initial_options = self.trace_options()
+        self._update_controls()
         self.brush_check = QCheckBox(tr("手繪遮罩"))
         self.brush_mode = QComboBox()
         self.brush_mode.addItem(tr("補回遮罩"), "include")

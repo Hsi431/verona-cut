@@ -7,7 +7,7 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QSettings, QSize, Qt
+from PySide6.QtCore import QSettings, QPointF, QSize, Qt
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtPdf import QPdfDocument
 from PySide6.QtWidgets import QApplication, QDialog, QDoubleSpinBox, QLineEdit, QStyle, QStyleOptionSpinBox, QVBoxLayout
@@ -115,7 +115,10 @@ class ThemeTests(unittest.TestCase):
                 self.assertEqual(image.pixelColor(4, image.height()-4), QColor(THEMES[theme]["background"]))
                 canvas = window.canvas.grab().toImage()
                 self.assertEqual(canvas.pixelColor(4, 4), QColor(THEMES[theme]["canvas"]))
-                self.assertEqual(canvas.pixelColor(100, 100), PAPER)
+                page_origin = window.canvas.canvas_origin()
+                paper_point = page_origin + QPointF(12.5 * window.canvas.zoom,
+                                                   12.5 * window.canvas.zoom)
+                self.assertEqual(canvas.pixelColor(round(paper_point.x()), round(paper_point.y())), PAPER)
 
     def test_dark_dialog_input_and_disabled_text_inherit_readable_palette(self):
         window = self.window()

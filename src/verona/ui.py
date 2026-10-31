@@ -15,10 +15,11 @@ import re
 import shutil
 import sys
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QEvent, QLineF, QObject, QPointF, QRunnable, QRectF, Qt, QTemporaryDir, QThreadPool, QSettings, Signal, Slot
+from PySide6.QtCore import QEvent, QLineF, QObject, QPointF, QRunnable, QRectF, Qt, QTemporaryDir, QThreadPool, QSettings, QTimer, Signal, Slot
 from PySide6.QtGui import (
     QAction, QActionGroup, QColor, QContextMenuEvent, QCursor, QFont, QImage, QPainter, QPainterPath, QPainterPathStroker, QPen, QPixmap,
     QTransform, QPalette,
@@ -42,6 +43,7 @@ from .grouping import expand_selection, group_items, ungroup_items, remap_group_
 PAGE_WIDTH_MM = 300.0
 PAGE_HEIGHT_MM = 300.0
 PAGE_MARGIN = 34.0
+RULER_SIZE = 26
 DEFAULT_ZOOM = 1.8
 _MAX_CANVAS_EDGE_BYTES = 128 * 1024 * 1024
 
@@ -156,6 +158,94 @@ def _display_name(name: str) -> str:
     return tr(name) if name in {"矩形", "圓形", "文字輪廓", "路徑"} else name
 
 
+class CanvasRuler(QWidget):
+    def __init__(self, scroll: "CanvasScrollArea", orientation: Qt.Orientation | None) -> None:
+        super().__init__(scroll)
+        self.scroll = scroll
+        self.orientation = orientation
+
+    def paintEvent(self, _event: Any) -> None:
+        canvas = self.scroll.widget()
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor(canvas.owner.theme_colors["canvas"]))
+        if self.orientation is None:
+            return
+        painter.setPen(QPen(QColor(canvas.owner.theme_colors["ruler"]), 1))
+        font = QFont("Noto Sans")
+        font.setPixelSize(11)
+        painter.setFont(font)
+        metrics = painter.fontMetrics()
+        label_step = 20 * max(1, math.ceil(
+            (metrics.horizontalAdvance("300") + 8) / (20 * canvas.zoom)))
+        horizontal = self.orientation == Qt.Orientation.Horizontal
+        origin = canvas.canvas_origin() + QPointF(canvas.pos())
+        start = origin.x() if horizontal else origin.y()
+        length = self.width() if horizontal else self.height()
+        if horizontal:
+            painter.drawLine(0, RULER_SIZE - 1, self.width(), RULER_SIZE - 1)
+        else:
+            painter.drawLine(RULER_SIZE - 1, 0, RULER_SIZE - 1, self.height())
+        for value in range(0, 301, 10):
+            position = start + value * canvas.zoom
+            if not 0 <= position < length:
+                continue
+            if horizontal:
+                painter.drawLine(QPointF(position, RULER_SIZE - 6), QPointF(position, RULER_SIZE - 1))
+            else:
+                painter.drawLine(QPointF(RULER_SIZE - 6, position), QPointF(RULER_SIZE - 1, position))
+            if value % label_step:
+                continue
+            text = str(value)
+            bounds = QRectF(metrics.boundingRect(text))
+            if horizontal:
+                point = QPointF(position + 4, RULER_SIZE - 11)
+                if self.rect().adjusted(1, 1, -1, -1).contains(bounds.translated(point).toAlignedRect()):
+                    painter.drawText(point, text)
+            else:
+                painter.save()
+                painter.translate(RULER_SIZE - 11, position + 3)
+                painter.rotate(-90)
+                if self.rect().adjusted(1, 1, -1, -1).contains(painter.transform().mapRect(bounds).toAlignedRect()):
+                    painter.drawText(QPointF(0, 0), text)
+                painter.restore()
+
+
+class CanvasScrollArea(QScrollArea):
+    """Keep rulers outside the scrolling canvas and align them to its origin."""
+
+    def __init__(self, canvas: "DesignCanvas") -> None:
+        super().__init__()
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.horizontal_ruler = CanvasRuler(self, Qt.Orientation.Horizontal)
+        self.vertical_ruler = CanvasRuler(self, Qt.Orientation.Vertical)
+        self.ruler_corner = CanvasRuler(self, None)
+        self.setViewportMargins(RULER_SIZE, RULER_SIZE, 0, 0)
+        self.setWidget(canvas)
+        self.setWidgetResizable(True)
+        self.viewport().setAcceptDrops(True)
+        for bar in (self.horizontalScrollBar(), self.verticalScrollBar()):
+            bar.valueChanged.connect(self._update_rulers)
+
+    def _update_rulers(self, *_args: Any) -> None:
+        self.horizontal_ruler.update()
+        self.vertical_ruler.update()
+
+    def viewportEvent(self, event) -> bool:
+        result = super().viewportEvent(event)
+        if event.type() == QEvent.Type.Resize:
+            viewport = self.viewport().geometry()
+            self.horizontal_ruler.setGeometry(viewport.x(), 0, viewport.width(), RULER_SIZE)
+            self.vertical_ruler.setGeometry(0, viewport.y(), RULER_SIZE, viewport.height())
+            self.ruler_corner.setGeometry(0, 0, RULER_SIZE, RULER_SIZE)
+            self._update_rulers()
+        return result
+
+    def eventFilter(self, watched, event) -> bool:
+        if watched is self.widget() and event.type() in (QEvent.Type.Move, QEvent.Type.Resize, QEvent.Type.Paint):
+            self._update_rulers()
+        return super().eventFilter(watched, event)
+
+
 class DesignCanvas(QWidget):
     selectionChanged = Signal(int)
     geometryChanged = Signal()
@@ -164,6 +254,11 @@ class DesignCanvas(QWidget):
         super().__init__()
         self.owner = owner
         self.zoom = DEFAULT_ZOOM
+        self._view_offset = QPointF()
+        self._zoom_anchor = None
+        self._zoom_timer = QTimer(self)
+        self._zoom_timer.setSingleShot(True)
+        self._zoom_timer.timeout.connect(self._restore_zoom_anchor)
         self.interactive = interactive
         self.drag_start: QPointF | None = None
         self.drag_index = -1
@@ -183,6 +278,7 @@ class DesignCanvas(QWidget):
         self.marquee_base = set()
         self.marquee_before = set()
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAcceptDrops(True)
         self.setMouseTracking(True)
         self.setToolTip(tr("右鍵開啟物件選單；Shift 拖曳鎖定水平／垂直，Alt 拖曳複製。\n"
                            "拖曳四角縮放、上方圓點旋轉；Shift 旋轉每次 15°；Esc 取消拖曳。"))
@@ -195,13 +291,20 @@ class DesignCanvas(QWidget):
         )
 
     def set_zoom(self, value: float) -> None:
+        self._zoom_timer.stop()
+        self._zoom_anchor = None
         self.zoom = max(0.1, min(64.0, value))
         self._resize_to_page()
         self.update()
 
+    def canvas_origin(self) -> QPointF:
+        return QPointF(max(PAGE_MARGIN, (self.width() - PAGE_WIDTH_MM * self.zoom) / 2),
+                       max(PAGE_MARGIN, (self.height() - PAGE_HEIGHT_MM * self.zoom) / 2)) + self._view_offset
+
     def _world_point(self, point: QPointF) -> QPointF:
-        return QPointF((point.x() - PAGE_MARGIN) / self.zoom,
-                       (point.y() - PAGE_MARGIN) / self.zoom)
+        origin = self.canvas_origin()
+        return QPointF((point.x() - origin.x()) / self.zoom,
+                       (point.y() - origin.y()) / self.zoom)
 
     def item_path(self, item: dict[str, Any], key: str = "contours") -> QPainterPath:
         contours = item.get(key, [])
@@ -295,7 +398,8 @@ class DesignCanvas(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.fillRect(self.rect(), QColor(self.owner.theme_colors["canvas"]))
         painter.save()
-        painter.translate(PAGE_MARGIN, PAGE_MARGIN)
+        origin = self.canvas_origin()
+        painter.translate(origin)
         painter.scale(self.zoom, self.zoom)
 
         page = QRectF(0, 0, PAGE_WIDTH_MM, PAGE_HEIGHT_MM)
@@ -403,26 +507,6 @@ class DesignCanvas(QWidget):
         painter.restore()
         painter.restore()
 
-        # Keep rulers readable inside the fixed screen margin at every zoom.
-        painter.setPen(QPen(QColor(self.owner.theme_colors["ruler"]), 1))
-        font = QFont("Noto Sans")
-        font.setPixelSize(11)
-        painter.setFont(font)
-        label_step = 20 * max(1, math.ceil(
-            (painter.fontMetrics().horizontalAdvance("300") + 8) / (20 * self.zoom)))
-        for value in range(0, 301, 10):
-            position = PAGE_MARGIN + value * self.zoom
-            painter.drawLine(QPointF(position, PAGE_MARGIN - 6), QPointF(position, PAGE_MARGIN))
-            if value % label_step == 0:
-                painter.drawText(QPointF(position + 4, PAGE_MARGIN - 12), str(value))
-            painter.drawLine(QPointF(PAGE_MARGIN - 6, position), QPointF(PAGE_MARGIN, position))
-            if value % label_step == 0:
-                painter.save()
-                painter.translate(PAGE_MARGIN - 12, position + 3)
-                painter.rotate(-90)
-                painter.drawText(QPointF(0, 0), str(value))
-                painter.restore()
-
     def item_at(self, point: QPointF, *, include_locked=False) -> int:
         for index in range(len(self.owner.items) - 1, -1, -1):
             item = self.owner.items[index]
@@ -461,6 +545,7 @@ class DesignCanvas(QWidget):
         self.drag_toggle_selection = None
         if self.space_pressed:
             self.pan_start = event.globalPosition() if hasattr(event, "globalPosition") else event.position()
+            self.pan_offset_start = QPointF(self._view_offset)
             self.pan_scroll = (self.owner.canvas_scroll.horizontalScrollBar().value(),
                                self.owner.canvas_scroll.verticalScrollBar().value())
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
@@ -516,6 +601,10 @@ class DesignCanvas(QWidget):
             delta = (event.globalPosition() if hasattr(event, "globalPosition") else event.position()) - self.pan_start
             self.owner.canvas_scroll.horizontalScrollBar().setValue(self.pan_scroll[0] - round(delta.x()))
             self.owner.canvas_scroll.verticalScrollBar().setValue(self.pan_scroll[1] - round(delta.y()))
+            self._view_offset = self.pan_offset_start + delta - QPointF(
+                self.pan_scroll[0] - self.owner.canvas_scroll.horizontalScrollBar().value(),
+                self.pan_scroll[1] - self.owner.canvas_scroll.verticalScrollBar().value())
+            self.update()
             return
         if self.marquee_start is not None:
             self.marquee_end = self._world_point(event.position())
@@ -621,13 +710,30 @@ class DesignCanvas(QWidget):
         if not event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
             event.ignore()
             return
-        point = self._world_point(event.position())
-        scroll = self.owner.canvas_scroll
-        old_x, old_y = event.position().x() - scroll.horizontalScrollBar().value(), event.position().y() - scroll.verticalScrollBar().value()
+        target = event.position() + QPointF(self.pos())
+        if self._zoom_anchor is None:
+            point = self._world_point(event.position())
+        else:
+            previous_point, previous_target = self._zoom_anchor
+            point = previous_point + (target - previous_target) / self.zoom
         self.owner.change_zoom(1.25 ** (event.angleDelta().y() / 120))
-        scroll.horizontalScrollBar().setValue(round(PAGE_MARGIN + point.x()*self.zoom - old_x))
-        scroll.verticalScrollBar().setValue(round(PAGE_MARGIN + point.y()*self.zoom - old_y))
+        self._zoom_anchor = point, target
+        self._zoom_timer.start(0)
         event.accept()
+
+    def _restore_zoom_anchor(self) -> None:
+        if self._zoom_anchor is None:
+            return
+        point, target = self._zoom_anchor
+        self._zoom_anchor = None
+        scroll = self.owner.canvas_scroll
+        origin = self.canvas_origin()
+        scroll.horizontalScrollBar().setValue(round(origin.x() + point.x()*self.zoom - target.x()))
+        scroll.verticalScrollBar().setValue(round(origin.y() + point.y()*self.zoom - target.y()))
+        # When the page fits, scrollbars cannot compensate. Keep the remaining
+        # translation in the view so zoom stays anchored even at the endpoints.
+        self._view_offset += target - (self.canvas_origin() + point * self.zoom + QPointF(self.pos()))
+        self.update()
 
     def keyPressEvent(self, event: Any) -> None:
         if event.key() == Qt.Key.Key_Escape and self.marquee_start is not None:
@@ -938,13 +1044,20 @@ class VeronaWindow(QMainWindow):
         self._documents: list[dict[str, Any]] = []
         self._active_document = 0
         self._closing = False
+        self._closed = False
         self._tasks: dict[FunctionTask, tuple[Any, Any]] = {}
         self.usb_devices: list[Any] = []
         self.sending = False
+        self._send_cancel_event: threading.Event | None = None
+        self._fit_page_height = True
+        self._fit_timer = QTimer(self)
+        self._fit_timer.setSingleShot(True)
+        self._fit_timer.timeout.connect(self._apply_page_fit)
         self._ratio_locked = True
         self.settings = QSettings("Verona", "Workspace")
         self.theme_name = self.settings.value("theme", "light", type=str)
         self._build_ui()
+        self.setAcceptDrops(True)
         self.sendProgress.connect(self._send_progress)
         self.wifi_host.setText(host if host is not None else
                                os.environ.get("VERONA_HOST") or self.settings.value("wifi/host", "", type=str))
@@ -957,11 +1070,11 @@ class VeronaWindow(QMainWindow):
         self._alt_mouse_grab = False
 
     def showEvent(self, event) -> None:
-        # Only X11 needs the application-wide Alt grab; every installed filter
-        # runs for every application event, so keep it to visible windows.
-        if QApplication.platformName() == "xcb":
-            QApplication.instance().installEventFilter(self)
+        # Route file drops from child widgets and track viewport resizing.
+        # Keep the application-wide filter limited to visible editor windows.
+        QApplication.instance().installEventFilter(self)
         super().showEvent(event)
+        self._schedule_page_fit()
 
     def hideEvent(self, event) -> None:
         self._release_alt_grab()
@@ -975,6 +1088,20 @@ class VeronaWindow(QMainWindow):
 
     def eventFilter(self, watched, event) -> bool:
         kind = event.type()
+        if (kind in (QEvent.Type.DragEnter, QEvent.Type.DragMove, QEvent.Type.Drop)
+                and isinstance(watched, QWidget)
+                and (watched is self or self.isAncestorOf(watched))
+                and event.mimeData().hasUrls()):
+            if kind == QEvent.Type.Drop:
+                self.dropEvent(event)
+            elif kind == QEvent.Type.DragEnter:
+                self.dragEnterEvent(event)
+            else:
+                self.dragMoveEvent(event)
+            return True
+        if (kind == QEvent.Type.Resize and hasattr(self, "canvas_scroll")
+                and watched is self.canvas_scroll.viewport()):
+            self._schedule_page_fit()
         if kind == QEvent.Type.KeyRelease and event.key() == Qt.Key.Key_Alt and self._alt_mouse_grab:
             self._release_alt_grab()
             event.accept()
@@ -995,6 +1122,40 @@ class VeronaWindow(QMainWindow):
             return True
         return super().eventFilter(watched, event)
 
+    def _schedule_page_fit(self) -> None:
+        if self._fit_page_height:
+            self._fit_timer.start(0)
+
+    def fit_page_height(self) -> None:
+        self._fit_page_height = True
+        self.fit_height_action.setChecked(True)
+        self._apply_page_fit()
+
+    def _apply_page_fit(self) -> None:
+        if not self._fit_page_height or not hasattr(self, "canvas_scroll"):
+            return
+        self.canvas._zoom_timer.stop()
+        self.canvas._zoom_anchor = None
+        if not self.canvas._view_offset.isNull():
+            self.canvas._view_offset = QPointF()
+            self.canvas.update()
+        height = self.metadata.get("print_cut", {}).get("paper_height", PAGE_HEIGHT_MM)
+        if not isinstance(height, (int, float)) or not math.isfinite(height) or not 0 < height <= PAGE_HEIGHT_MM:
+            height = PAGE_HEIGHT_MM
+        available = self.canvas_scroll.maximumViewportSize()
+        if available.height() <= PAGE_MARGIN * 2:
+            return
+        zoom = (available.height() - PAGE_MARGIN * 2) / height
+        needs_vertical = PAGE_HEIGHT_MM * zoom + PAGE_MARGIN * 2 > available.height() + 1
+        width = available.width() - (self.canvas_scroll.verticalScrollBar().sizeHint().width() if needs_vertical else 0)
+        if PAGE_WIDTH_MM * zoom + PAGE_MARGIN * 2 > width:
+            zoom = (available.height() - self.canvas_scroll.horizontalScrollBar().sizeHint().height()
+                    - PAGE_MARGIN * 2) / height
+        if abs(self.canvas.zoom - zoom) > 1e-6:
+            self.canvas.set_zoom(zoom)
+            self.zoom_label.setText(f"{round(self.canvas.zoom * 100)}%")
+            self.canvas_scroll.verticalScrollBar().setValue(0)
+
     def _build_ui(self) -> None:
         self._apply_theme(self.theme_name)
         root = QWidget()
@@ -1002,41 +1163,52 @@ class VeronaWindow(QMainWindow):
         outer.setContentsMargins(16, 14, 16, 12)
         outer.setSpacing(12)
 
-        actions = QToolBar(tr("設計工具"), self)
+        actions = QToolBar(tr("檔案工具"), self)
         actions.setObjectName("designTools")
         actions.setMovable(False)
         actions.setFloatable(False)
         actions.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.design_toolbar = actions
         self._tool(actions, tr("新增設計"), self.new_design)
-        self._tool(actions, tr("匯入 SVG"), self.import_svg)
-        self._tool(actions, tr("匯入圖片"), self.import_image)
+        self._tool(actions, tr("開啟…"), self.open_design)
+        self.import_button = QToolButton()
+        self.import_button.setText(tr("匯入"))
+        self.import_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        import_menu = QMenu(self.import_button)
+        for label, callback in (("匯入圖片", self.import_image), ("匯入 SVG", self.import_svg),
+                                ("匯入 PDF／SVG 圖稿", self.import_document_artwork)):
+            import_menu.addAction(tr(label), callback)
+        self.import_button.setMenu(import_menu)
+        actions.addWidget(self.import_button)
         self.print_button = self._tool(actions, tr("列印…"), self.print_design)
-        actions.addSeparator()
-        self._tool(actions, tr("矩形"), self.add_rectangle)
-        self._tool(actions, tr("圓形"), self.add_ellipse)
-        self._tool(actions, tr("文字輪廓"), self.add_text)
-        actions.addSeparator()
-        self._tool(actions, tr("複製"), self.duplicate_selected)
-        self._tool(actions, tr("刪除"), self.delete_selected)
-        actions.addSeparator()
         self.undo_action = QAction(tr("復原"), self)
         self.undo_action.setShortcut("Ctrl+Z")
         self.undo_action.triggered.connect(self.undo)
         self.redo_action = QAction(tr("重做"), self)
         self.redo_action.setShortcut("Ctrl+Shift+Z")
         self.redo_action.triggered.connect(self.redo)
-        self._tool(actions, "−", lambda: self.change_zoom(0.8))
+        self.view_toolbar = QToolBar(tr("檢視工具"), self)
+        self.view_toolbar.setObjectName("viewTools")
+        self.view_toolbar.setMovable(False)
+        self.view_toolbar.setFloatable(False)
+        self.view_toolbar.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        self._tool(self.view_toolbar, "−", lambda: self.change_zoom(0.8))
         self.zoom_label = QLabel(f"{round(DEFAULT_ZOOM * 100)}%")
         self.zoom_label.setMinimumWidth(44)
         self.zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        actions.addWidget(self.zoom_label)
-        self._tool(actions, "+", lambda: self.change_zoom(1.25))
-        spacer = QWidget()
-        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        actions.addWidget(spacer)
-        self._tool(actions, tr("切割預覽"), self.show_preview)
-        outer.addWidget(actions)
+        self.view_toolbar.addWidget(self.zoom_label)
+        self._tool(self.view_toolbar, "+", lambda: self.change_zoom(1.25))
+        self.fit_height_action = QAction(tr("符合頁高"), self)
+        self.fit_height_action.setCheckable(True)
+        self.fit_height_action.setChecked(self._fit_page_height)
+        self.fit_height_action.setShortcut("Ctrl+0")
+        self.fit_height_action.triggered.connect(self.fit_page_height)
+        self.view_toolbar.addAction(self.fit_height_action)
+        top_row = QHBoxLayout()
+        top_row.addWidget(actions)
+        top_row.addStretch(1)
+        top_row.addWidget(self.view_toolbar)
+        outer.addLayout(top_row)
 
         self.tab_bar = QTabBar()
         self.tab_bar.setTabsClosable(True)
@@ -1052,11 +1224,8 @@ class VeronaWindow(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal)
         self.canvas = DesignCanvas(self)
         self.canvas.geometryChanged.connect(self.refresh_properties)
-        scroll = QScrollArea()
+        scroll = CanvasScrollArea(self.canvas)
         self.canvas_scroll = scroll
-        scroll.setWidget(self.canvas)
-        scroll.setWidgetResizable(False)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
         splitter.addWidget(scroll)
         self.inspector_scroll = QScrollArea()
         self.inspector_scroll.setWidgetResizable(True)
@@ -1080,6 +1249,18 @@ class VeronaWindow(QMainWindow):
             [220, 500] if expanded else [self.layer_section.minimumSizeHint().height(), 720]))
         inspector_panel.setMinimumWidth(370)
         inspector_layout.addWidget(side_splitter)
+        output_row = QHBoxLayout()
+        self.preview_button = QPushButton(tr("切割預覽"))
+        self.preview_button.clicked.connect(self.show_preview)
+        output_row.addWidget(self.preview_button)
+        self.output_button = QPushButton(tr("匯出 PLT…"))
+        self.output_button.clicked.connect(self.export_plt)
+        output_row.addWidget(self.output_button)
+        inspector_layout.addLayout(output_row)
+        self.send_button = QPushButton(tr("傳送至 Juliet…"))
+        self.send_button.setObjectName("primary")
+        self.send_button.clicked.connect(self.send_to_cutter)
+        inspector_layout.addWidget(self.send_button)
         splitter.addWidget(inspector_panel)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 0)
@@ -1091,6 +1272,12 @@ class VeronaWindow(QMainWindow):
         self.status_label.setObjectName("muted")
         footer.addWidget(self.status_label)
         footer.addStretch(1)
+        self.stop_send_button = QPushButton(tr("停止傳送"))
+        self.stop_send_button.setObjectName("stopTransfer")
+        self.stop_send_button.setToolTip(tr("停止電腦繼續傳送；已送進機器的資料仍可能執行。"))
+        self.stop_send_button.clicked.connect(self.stop_sending)
+        footer.addWidget(self.stop_send_button)
+        self._update_send_controls()
         outer.addLayout(footer)
         self.setCentralWidget(root)
 
@@ -1100,6 +1287,8 @@ class VeronaWindow(QMainWindow):
                 "settings": self._cut_settings(), "saved": self.saved_snapshot,
                 "undo": self.undo_stack, "redo": self.redo_stack,
                 "zoom": self.canvas.zoom,
+                "pan_offset": (self.canvas._view_offset.x(), self.canvas._view_offset.y()),
+                "fit_height": self._fit_page_height,
                 "view": (self.image_opacity.value(), self.cutline_view.isChecked()),
                 "scroll": (self.canvas_scroll.horizontalScrollBar().value(),
                            self.canvas_scroll.verticalScrollBar().value())}
@@ -1120,6 +1309,11 @@ class VeronaWindow(QMainWindow):
         self.cutline_view.setChecked(state.get("view", (100, False))[1])
         self.image_opacity.setValue(state.get("view", (100, False))[0])
         self.canvas.set_zoom(state["zoom"])
+        self.canvas._view_offset = QPointF(*state.get("pan_offset", (0, 0)))
+        self._fit_page_height = state.get("fit_height", False)
+        self.fit_height_action.setChecked(self._fit_page_height)
+        self._fit_timer.stop()
+        self._schedule_page_fit()
         self.zoom_label.setText(f"{round(self.canvas.zoom * 100)}%")
         self.canvas_scroll.horizontalScrollBar().setValue(state["scroll"][0])
         self.canvas_scroll.verticalScrollBar().setValue(state["scroll"][1])
@@ -1291,6 +1485,10 @@ class VeronaWindow(QMainWindow):
         self.post_edit_summary = QLabel(tr("選取圖片"), objectName="muted")
         self.post_edit_summary.setWordWrap(True)
         post_edit_layout.addWidget(self.post_edit_summary)
+        self.smooth_cutline_button = QPushButton(tr("平滑切割線…"))
+        self.smooth_cutline_button.clicked.connect(self.smooth_selected_cutlines)
+        self.smooth_cutline_button.setEnabled(False)
+        post_edit_layout.addWidget(self.smooth_cutline_button)
         self.edit_bleed_button = QPushButton(tr("新增／調整出血…"))
         self.edit_bleed_button.setToolTip(tr("出血可同時套用到多張圖片，不改動切割線。"))
         self.edit_bleed_button.clicked.connect(self.edit_selected_bleed)
@@ -1463,14 +1661,10 @@ class VeronaWindow(QMainWindow):
                        self.force_spin.valueChanged, self.custom_settings.toggled,
                        self.tool_combo.currentIndexChanged):
             signal.connect(self._refresh_tab_titles)
+            signal.connect(self._update_cut_summary)
+        self.cut_section.expandedChanged.connect(self._update_cut_summary)
+        self._update_cut_summary()
         layout.addStretch(1)
-        self.output_button = QPushButton(tr("匯出 PLT…"))
-        self.output_button.clicked.connect(self.export_plt)
-        layout.addWidget(self.output_button)
-        self.send_button = QPushButton(tr("傳送至 Juliet…"))
-        self.send_button.setObjectName("primary")
-        self.send_button.clicked.connect(self.send_to_cutter)
-        layout.addWidget(self.send_button)
         return panel
 
     @staticmethod
@@ -1485,6 +1679,16 @@ class VeronaWindow(QMainWindow):
     def _toggle_cut_settings(self, enabled: bool) -> None:
         self.speed_spin.setEnabled(enabled)
         self.force_spin.setEnabled(enabled)
+
+    def _update_cut_summary(self, *_args: Any) -> None:
+        summary = ""
+        if not self.cut_section.isExpanded():
+            if self.custom_settings.isChecked():
+                summary = tr("{passes} 次 · 速度 {speed} · 壓力 {force}",
+                    passes=self.passes_spin.value(), speed=self.speed_spin.value(), force=self.force_spin.value())
+            else:
+                summary = tr("{passes} 次 · 機器設定", passes=self.passes_spin.value())
+        self.cut_section.setSummary(summary)
 
     def _cut_toggled(self, checked: bool) -> None:
         self.set_layer_property(sorted(self.selected_indices()), "cut", checked)
@@ -1649,18 +1853,35 @@ class VeronaWindow(QMainWindow):
 
         from . import transport
         self.sending = True
-        self.send_button.setEnabled(False)
+        cancel_event = threading.Event()
+        self._send_cancel_event = cancel_event
+        self._update_send_controls()
         self.status_label.setText(tr("正在傳送資料…"))
         if mode == "wifi":
-            task = lambda: transport.send_tcp(payload, host, port, on_progress=self.sendProgress.emit)
+            task = lambda: transport.send_tcp(payload, host, port, on_progress=self.sendProgress.emit,
+                                              cancel_event=cancel_event)
             self._pending_wifi = (host, port)
         else:
-            task = lambda: transport.send_usb(payload, device)
+            task = lambda: transport.send_usb(payload, device, cancel_event=cancel_event)
         def send():
             with device_lock():
                 return task()
 
         self._dispatch(send, self._send_succeeded, self._send_failed)
+
+    def _update_send_controls(self) -> None:
+        stopping = self._send_cancel_event is not None and self._send_cancel_event.is_set()
+        self.send_button.setEnabled(not self.sending)
+        self.import_button.setEnabled(not self.sending)
+        self.stop_send_button.setVisible(self.sending)
+        self.stop_send_button.setEnabled(self.sending and not stopping)
+
+    def stop_sending(self) -> None:
+        if not self.sending or self._send_cancel_event is None:
+            return
+        self._send_cancel_event.set()
+        self._update_send_controls()
+        self.status_label.setText(tr("正在停止傳送…"))
 
     def _confirm_send(self, details: str) -> bool:
         dialog = QMessageBox(self)
@@ -1675,27 +1896,37 @@ class VeronaWindow(QMainWindow):
 
     @Slot(int, int)
     def _send_progress(self, sent: int, total: int) -> None:
-        if self.sending:
+        if self.sending and not (self._send_cancel_event and self._send_cancel_event.is_set()):
             self.status_label.setText(tr("正在傳送：{percent}%（{sent}/{total} bytes）",
                                          percent=sent * 100 // total, sent=sent, total=total))
 
     def _send_succeeded(self, sent: int) -> None:
+        if self._send_cancel_event is not None and self._send_cancel_event.is_set():
+            self._send_failed(tr("傳送已停止。"))
+            return
         if hasattr(self, "_pending_wifi"):
             self._remember_wifi(*self._pending_wifi)
             del self._pending_wifi
         self.sending = False
-        self.send_button.setEnabled(True)
-        self.status_label.setText(tr("已傳送 {sent} bytes · 實機切割結果尚未驗證", sent=sent))
-        QMessageBox.information(
-            self, tr("資料已傳送"), tr("傳輸層已送出 {sent} bytes。請在 Juliet 機器端確認切割結果。", sent=sent),
-        )
+        self._send_cancel_event = None
+        self._update_send_controls()
+        self.status_label.setText(tr("已傳送 {sent} bytes", sent=sent))
 
     def _send_failed(self, error: str) -> None:
+        cancelled = self._send_cancel_event is not None and self._send_cancel_event.is_set()
         if hasattr(self, "_pending_wifi"):
             del self._pending_wifi
         self.sending = False
-        self.send_button.setEnabled(True)
-        self.status_label.setText(tr("傳送失敗"))
+        self._send_cancel_event = None
+        self._update_send_controls()
+        title = tr("已停止傳送") if cancelled else tr("傳送失敗")
+        self.status_label.setText(title)
+        if self._closed:
+            return
+        if cancelled:
+            QMessageBox.warning(self, title,
+                tr("電腦已停止後續傳送。機器已收到的資料仍可能執行；請確認機器端也已停止。"))
+            return
         QMessageBox.warning(
             self, tr("傳送失敗"),
             tr("{error}\n\n傳輸中斷前可能已有部分資料送出，請先檢查 Juliet 狀態。此介面不會自動重送。", error=error),
@@ -1790,7 +2021,13 @@ class VeronaWindow(QMainWindow):
         self.select_all_action.triggered.connect(lambda: self.select_many(range(len(self.items))))
         self.canvas.addAction(self.select_all_action)
         edit_menu.addAction(self.select_all_action)
+        self.insert_menu = self.menuBar().addMenu(tr("插入"))
+        for label, callback in (("矩形", self.add_rectangle), ("圓形", self.add_ellipse),
+                                ("文字輪廓", self.add_text)):
+            self.insert_menu.addAction(tr(label), callback)
         appearance_menu = self.menuBar().addMenu(tr("外觀"))
+        appearance_menu.addAction(self.fit_height_action)
+        appearance_menu.addSeparator()
         theme_group = QActionGroup(self)
         theme_group.setExclusive(True)
         self.theme_actions = {}
@@ -1890,6 +2127,7 @@ class VeronaWindow(QMainWindow):
         scroll_position = (self.canvas_scroll.horizontalScrollBar().value(),
                            self.canvas_scroll.verticalScrollBar().value())
         zoom = self.canvas.zoom
+        pan_offset = QPointF(self.canvas._view_offset)
         ratio_locked = self.lock_ratio.isChecked()
         was_sending = self.sending
         usb_devices = self.usb_devices[:]
@@ -1917,14 +2155,16 @@ class VeronaWindow(QMainWindow):
             self.usb_combo.addItem(tr("請重新整理 USB 裝置"), None)
         self.undo_stack, self.redo_stack = undo, redo
         self.canvas.set_zoom(zoom)
+        self.canvas._view_offset = pan_offset
         self.zoom_label.setText(f"{round(zoom * 100)}%")
         self.canvas_scroll.horizontalScrollBar().setValue(scroll_position[0])
         self.canvas_scroll.verticalScrollBar().setValue(scroll_position[1])
         self.lock_ratio.setChecked(ratio_locked)
         self.sending = was_sending
-        self.send_button.setEnabled(not was_sending)
+        self._update_send_controls()
         if was_sending:
-            self.status_label.setText(tr("正在傳送資料…"))
+            stopping = self._send_cancel_event is not None and self._send_cancel_event.is_set()
+            self.status_label.setText(tr("正在停止傳送…") if stopping else tr("正在傳送資料…"))
         self._refresh_history_actions()
         self._refresh_tab_titles()
 
@@ -2148,6 +2388,37 @@ class VeronaWindow(QMainWindow):
                 dialog.deleteLater()
         except (ValueError, OSError) as error:
             QMessageBox.warning(self, tr("編輯圖片遮罩"), str(error))
+
+    def smooth_selected_cutlines(self) -> None:
+        if self._selection_blocked() or self.sending:
+            return
+        indices = sorted(i for i in self.selected_indices()
+                         if self.items[i].get("cut", True) and self.items[i].get("contours")
+                         and not self.items[i].get("registration_guide"))
+        if not indices:
+            return
+        from .smoothing_dialog import ContourSmoothingDialog
+        dialog = ContourSmoothingDialog(self, indices)
+        try:
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            changes = {i: contours for i, contours in dialog.build_contours().items()
+                       if contours != self.items[i]["contours"]}
+            if changes:
+                before = self._snapshot()
+                for index, contours in changes.items():
+                    item = dict(self.items[index])
+                    item["contours"] = contours
+                    if "node_paths" in item:
+                        item["node_paths"] = {key: path for key, path in item["node_paths"].items()
+                                              if contours[int(key)] == self.items[index]["contours"][int(key)]}
+                    self.items[index] = item
+                self.push_undo(before)
+                self.refresh_all()
+        except (ValueError, OSError) as error:
+            QMessageBox.warning(self, tr("平滑切割線"), str(error))
+        finally:
+            dialog.deleteLater()
 
     def edit_selected_bleed(self) -> None:
         if self._selection_blocked():
@@ -2383,6 +2654,9 @@ class VeronaWindow(QMainWindow):
         image_indices = [i for i in self.selected_indices() if "image_data" in self.items[i]
                          and not self.items[i].get("registration_guide")]
         self.edit_bleed_button.setEnabled(bool(image_indices) and not blocked)
+        self.smooth_cutline_button.setEnabled(not blocked and not self.sending and any(
+            self.items[i].get("cut", True) and self.items[i].get("contours")
+            and not self.items[i].get("registration_guide") for i in self.selected_indices()))
         self.remove_bleed_button.setEnabled(not blocked and any(self.items[i].get("bleed") for i in image_indices))
         self.restore_bleed_button.setEnabled(bool(image_indices) and not blocked)
         self.edit_image_button.setEnabled(count == 1 and len(image_indices) == 1 and not blocked)
@@ -2599,6 +2873,9 @@ class VeronaWindow(QMainWindow):
         self.status_label.setText(tr("已依印表機邊界最大化，請重新列印並測試對位。"))
 
     def change_zoom(self, factor: float) -> None:
+        self._fit_page_height = False
+        self.fit_height_action.setChecked(False)
+        self._fit_timer.stop()
         self.canvas.set_zoom(self.canvas.zoom * factor)
         self.zoom_label.setText(f"{round(self.canvas.zoom * 100)}%")
 
@@ -2648,11 +2925,54 @@ class VeronaWindow(QMainWindow):
             QMessageBox.critical(self, tr("匯入失敗"), str(error))
 
     def import_image(self) -> None:
+        if self.sending or QApplication.activeModalWidget() is not None:
+            return
         filename, _ = QFileDialog.getOpenFileName(
             self, tr("匯入圖片"), "",
             tr("點陣圖片 (*.png *.jpg *.jpeg *.bmp *.webp *.tif *.tiff)"))
         if not filename:
             return
+        self.import_image_path(filename)
+
+    @staticmethod
+    def _drop_image_paths(mime_data) -> list[str]:
+        if not mime_data.hasUrls():
+            return []
+        paths = []
+        for url in mime_data.urls():
+            if not url.isLocalFile():
+                return []
+            path = Path(url.toLocalFile())
+            if not path.is_file() or path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}:
+                return []
+            paths.append(str(path))
+        return paths
+
+    def dragEnterEvent(self, event) -> None:
+        if not self.sending and QApplication.activeModalWidget() is None and self._drop_image_paths(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event) -> None:
+        self.dragEnterEvent(event)
+
+    def dropEvent(self, event) -> None:
+        paths = self._drop_image_paths(event.mimeData())
+        if self.sending or QApplication.activeModalWidget() is not None or not paths:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        QTimer.singleShot(0, lambda: self._import_dropped_images(paths))
+
+    def _import_dropped_images(self, paths) -> None:
+        for filename in paths:
+            if not self.import_image_path(filename):
+                break
+
+    def import_image_path(self, filename: str) -> bool:
+        if self.sending or QApplication.activeModalWidget() is not None:
+            return False
         try:
             from PySide6.QtGui import QImageReader
             from .raster_import import ImportImageDialog
@@ -2666,10 +2986,12 @@ class VeronaWindow(QMainWindow):
                 raise ValueError(tr("無法讀取圖片或此格式未受支援。"))
             dialog = ImportImageDialog(image, Path(filename).stem, self)
             if dialog.exec() != QDialog.DialogCode.Accepted:
-                return
+                return False
             self._append_image_items(dialog.build_items(), dialog.mode_combo.currentData())
+            return True
         except Exception as error:
             QMessageBox.critical(self, tr("匯入失敗"), str(error))
+            return False
 
     def _append_image_items(self, items, mode):
         if not items:
@@ -2787,7 +3109,11 @@ class VeronaWindow(QMainWindow):
         self.undo_stack, self.redo_stack = [], []
         self.current_file = None
         self.saved_snapshot = self._document_state()
+        self.canvas._view_offset = QPointF()
         self.canvas.set_zoom(DEFAULT_ZOOM)
+        self._fit_page_height = True
+        self.fit_height_action.setChecked(True)
+        self._schedule_page_fit()
         self.cutline_view.setChecked(False)
         self.image_opacity.setValue(100)
         self.zoom_label.setText(f"{round(DEFAULT_ZOOM * 100)}%")
@@ -2947,6 +3273,9 @@ class VeronaWindow(QMainWindow):
         self.current_file = filename
         self.saved_snapshot = self._document_state()
         self.refresh_all()
+        self._fit_page_height = True
+        self.fit_height_action.setChecked(True)
+        self._schedule_page_fit()
 
     @staticmethod
     def _validate_document(data: Any, trusted_items=()) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -3269,6 +3598,8 @@ class VeronaWindow(QMainWindow):
                 event.ignore()
                 return
             self._release_alt_grab()
+            self._closed = True
+            self.stop_sending()
             QApplication.instance().removeEventFilter(self)
             event.accept()
         finally:

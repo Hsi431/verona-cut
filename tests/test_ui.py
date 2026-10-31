@@ -581,7 +581,8 @@ class DesignUiTests(unittest.TestCase):
             self.window.send_to_cutter()
             self.assertFalse(self.window.send_button.isEnabled())
             self._wait_for_tasks()
-            send.assert_called_once_with(payload, "192.0.2.44", 8080, on_progress=ANY)
+            send.assert_called_once_with(payload, "192.0.2.44", 8080, on_progress=ANY, cancel_event=ANY)
+            self.assertFalse(send.call_args.kwargs["cancel_event"].is_set())
             self.assertTrue(callable(send.call_args.kwargs["on_progress"]))
             self.assertIn("X 130.00", confirm.call_args.args[0])
             self.assertTrue(self.window.send_button.isEnabled())
@@ -687,7 +688,8 @@ class DesignUiTests(unittest.TestCase):
                 patch.object(QMessageBox, "information"):
             self.window.send_to_cutter()
             self._wait_for_tasks()
-            send.assert_called_once_with(payload, device)
+            send.assert_called_once_with(payload, device, cancel_event=ANY)
+            self.assertFalse(send.call_args.kwargs["cancel_event"].is_set())
 
     def test_transport_failure_warns_about_partial_data_and_restores_button(self):
         self.window.add_rectangle()
@@ -739,7 +741,7 @@ class DesignUiTests(unittest.TestCase):
             else:
                 QSettings("Verona", "Workspace").setValue("language", saved_pref)
 
-    def test_compact_height_keeps_toolbar_and_scrolls_to_output(self):
+    def test_compact_height_keeps_output_visible_outside_inspector_scroll(self):
         for language in ("en", "zh_TW"):
             self.window._change_language(language)
             for width, height in ((1280, 720), (1366, 768)):
@@ -747,22 +749,32 @@ class DesignUiTests(unittest.TestCase):
                 self.window.show()
                 self.app.processEvents()
                 self.assertTrue(self.window.inspector_scroll.widgetResizable())
-                self.window.inspector_scroll.ensureWidgetVisible(self.window.send_button)
                 self.window.inspector_scroll.verticalScrollBar().setValue(
                     self.window.inspector_scroll.verticalScrollBar().maximum())
                 self.app.processEvents()
-                button_rect = self.window.send_button.rect()
-                button_top_left = self.window.send_button.mapTo(self.window.inspector_scroll.viewport(), button_rect.topLeft())
-                self.assertGreaterEqual(button_top_left.y(), 0)
-                self.assertLessEqual(button_top_left.y() + button_rect.height(),
-                                     self.window.inspector_scroll.viewport().height())
-                self.assertTrue(self.window.send_button.isVisible())
-                self.assertTrue(self.window.output_button.isVisible())
-                preview = next(button for button in self.window.findChildren(QToolButton)
-                               if button.text() == ("Cut Preview" if language == "en" else "切割預覽"))
-                preview_bottom_right = preview.mapTo(self.window, preview.rect().bottomRight())
-                self.assertLessEqual(preview_bottom_right.x(), self.window.width())
+                for button in (self.window.send_button, self.window.output_button,
+                               self.window.preview_button):
+                    self.assertFalse(self.window.inspector_scroll.isAncestorOf(button))
+                    self.assertTrue(button.isVisible())
+                    top_left = button.mapTo(self.window, button.rect().topLeft())
+                    bottom_right = button.mapTo(self.window, button.rect().bottomRight())
+                    self.assertTrue(self.window.rect().contains(top_left))
+                    self.assertTrue(self.window.rect().contains(bottom_right))
         self.window.hide()
+
+    def test_collapsed_cut_settings_summarize_current_values(self):
+        self.window.passes_spin.setValue(2)
+        self.window.speed_spin.setValue(11)
+        self.window.force_spin.setValue(85)
+        self.window.custom_settings.setChecked(True)
+        section = self.window.cut_section
+        section.setExpanded(False)
+        self.assertEqual(section._toggle.text(), "切割工具 · 2 次 · 速度 11 · 壓力 85")
+        section.setExpanded(True)
+        self.assertEqual(section._toggle.text(), "切割工具")
+        self.window.custom_settings.setChecked(False)
+        section.setExpanded(False)
+        self.assertEqual(section._toggle.text(), "切割工具 · 2 次 · 機器設定")
 
     def test_failed_new_file_save_leaves_no_partial_design(self):
         with tempfile.TemporaryDirectory() as folder:

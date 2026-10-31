@@ -8,7 +8,7 @@ import math
 from typing import Any
 
 import numpy as np
-from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QRectF, QSize, Qt, QTimer
+from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QPointF, QRectF, QSize, Qt, QTimer
 from PySide6.QtGui import (
     QBitmap, QColor, QImage, QImageReader, QPainter, QPainterPath, QPainterPathStroker,
     QPen, QPixmap, QPolygonF, QRegion, QTransform,
@@ -21,44 +21,96 @@ from PySide6.QtWidgets import (
 from .editor_widgets import SafeDoubleSpinBox
 from .i18n import tr
 from .native_images import decode_qoi
+from .contour_smoothing import smooth_contours
 
 
 _MAX_PIXELS = 16_000_000
 _MAX_CACHE_BYTES = 512 * 1024 * 1024
 _DECODED_IMAGES = OrderedDict()
 TRACE_KEYS = {"mask_mode", "background", "tolerance", "inverted", "keep_holes",
-              "smoothing", "minimum_area_mm2", "offset_mm", "clip", "colors"}
+              "smoothing", "cut_smoothing_mm", "minimum_area_mm2", "offset_mm", "clip", "colors"}
 
 
 class ImageSizeSpinBox(SafeDoubleSpinBox):
+    def __init__(self, parent=None, *, display_decimals: int | None = None) -> None:
+        super().__init__(parent, display_decimals=display_decimals)
+
     def textFromValue(self, value: float) -> str:
+        if self._display_decimals is not None:
+            return super().textFromValue(value)
         return self.locale().toString(value, "f", self.decimals()).rstrip("0").rstrip(self.locale().decimalPoint())
 
 
 class MaskPreviewLabel(QLabel):
     paint_callback = None
     release_callback = None
+    zoom_callback = None
+    pan_callback = None
     last_point = None
+    pan_point = None
+    space_pan = False
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, event):
+        if self.zoom_callback and event.angleDelta().y():
+            self.zoom_callback(event.position(), 1.15 ** (event.angleDelta().y() / 120))
+            event.accept()
+            return
+        super().wheelEvent(event)
 
     def mousePressEvent(self, event):
+        if (event.button() == Qt.MouseButton.MiddleButton
+                or (event.button() == Qt.MouseButton.LeftButton and self.space_pan)):
+            self.pan_point = event.position()
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.LeftButton and self.paint_callback:
             self.last_point = event.position()
             if self.paint_callback(self.last_point, None):
+                event.accept()
                 return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
+        if self.pan_point is not None:
+            previous, self.pan_point = self.pan_point, event.position()
+            if self.pan_callback:
+                self.pan_callback(event.position() - previous)
+            event.accept()
+            return
         if self.paint_callback and self.last_point is not None and event.buttons() & Qt.MouseButton.LeftButton:
             previous, self.last_point = self.last_point, event.position()
             if self.paint_callback(self.last_point, previous):
+                event.accept()
                 return
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
+        if self.pan_point is not None:
+            self.pan_point = None
+            event.accept()
+            return
         self.last_point = None
         if self.release_callback:
             self.release_callback()
         super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
+            self.space_pan = True
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event):
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
+            self.space_pan = False
+            event.accept()
+            return
+        super().keyReleaseEvent(event)
 
 
 def decode_embedded_image(encoded: str) -> QImage:
@@ -283,7 +335,8 @@ def raster_options(image, changes):
     width = min(150., image.width()*25.4/dpi, 300.*image.width()/image.height())
     options = {"mode": "print_cut", "mask_mode": "alpha" if np.any(_rgba_array(image)[:, :, 3] < 255)
                else "background", "background": "#ffffff", "tolerance": 20,
-               "inverted": False, "keep_holes": True, "smoothing": 0, "colors": [],
+               "inverted": False, "keep_holes": True, "smoothing": 0, "cut_smoothing_mm": 0.0,
+               "colors": [],
                "minimum_area_mm2": 0., "offset_mm": 0., "width_mm": width,
                "height_mm": width*image.height()/image.width(), "clip": True,
                "bleed_mm": 0., "bleed_color": "#ffffff"}
@@ -303,7 +356,7 @@ def raster_options(image, changes):
             raise ValueError(f"{name} must be a boolean.")
     for name, low, high in (("width_mm", .000001, 300), ("height_mm", .000001, 300),
             ("minimum_area_mm2", 0, 1000), ("offset_mm", -5, 5), ("bleed_mm", 0, 5),
-            ("tolerance", 0, 255), ("smoothing", 0, 100)):
+            ("tolerance", 0, 255), ("smoothing", 0, 100), ("cut_smoothing_mm", 0, .5)):
         value = options[name]
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not low <= value <= high:
             raise ValueError(f"{name} must be finite and between {low} and {high}.")
@@ -323,7 +376,8 @@ def raster_options(image, changes):
 
 
 RAW_TRACE_KEYS = ("mask_mode", "background", "tolerance", "inverted", "colors", "smoothing", "keep_holes")
-OFFSET_TRACE_KEYS = ("width_mm", "height_mm", "minimum_area_mm2", "offset_mm", "bleed_mm")
+OFFSET_TRACE_KEYS = ("width_mm", "height_mm", "minimum_area_mm2", "offset_mm", "bleed_mm",
+                     "cut_smoothing_mm")
 
 
 def trace_raw(image, options, mask_override=None):
@@ -361,7 +415,19 @@ def trace_offsets(image, options, path):
                 filtered.closeSubpath()
         path_mm = filtered.simplified()
         path = path_mm * from_mm
-    cut_path = _offset_path(path_mm, options["offset_mm"]) * from_mm
+    cut_path_mm = _offset_path(path_mm, options["offset_mm"])
+    if options.get("cut_smoothing_mm", 0) > 0:
+        contours = [[(point.x(), point.y()) for point in polygon]
+                    for polygon in cut_path_mm.toSubpathPolygons()]
+        smoothed = smooth_contours(contours, options["cut_smoothing_mm"])
+        smoothed_path = QPainterPath()
+        smoothed_path.setFillRule(cut_path_mm.fillRule())
+        for contour in smoothed:
+            if len(contour) >= 3:
+                smoothed_path.addPolygon(QPolygonF([QPointF(x, y) for x, y in contour]))
+                smoothed_path.closeSubpath()
+        cut_path_mm = smoothed_path
+    cut_path = cut_path_mm * from_mm
     bleed_path = _offset_path(path_mm, options["bleed_mm"]) * from_mm
     return path, cut_path.simplified(), bleed_path.simplified()
 
@@ -455,6 +521,33 @@ class ImportImageDialog(QDialog):
         self.preview_label = MaskPreviewLabel()
         self.preview_label.setMinimumSize(500, 350)
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_label.zoom_callback = self._zoom_preview_at
+        self.preview_label.pan_callback = self._pan_preview
+        self.preview_zoom = 1.0
+        self.preview_pan = QPointF()
+        self.preview_zoom_label = QLabel("100%")
+        self.preview_zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_zoom_label.setMinimumWidth(48)
+        preview_tools = QHBoxLayout()
+        zoom_out = QPushButton(tr("−"))
+        zoom_out.setObjectName("previewZoomOut")
+        zoom_out.setToolTip(tr("縮小預覽"))
+        zoom_out.clicked.connect(lambda: self._zoom_preview_at(
+            QPointF(self.preview_label.rect().center()), 1 / 1.25))
+        zoom_in = QPushButton(tr("+"))
+        zoom_in.setObjectName("previewZoomIn")
+        zoom_in.setToolTip(tr("放大預覽"))
+        zoom_in.clicked.connect(lambda: self._zoom_preview_at(
+            QPointF(self.preview_label.rect().center()), 1.25))
+        fit_preview = QPushButton(tr("符合視窗"))
+        fit_preview.setObjectName("previewZoomFit")
+        fit_preview.setToolTip(tr("符合視窗"))
+        fit_preview.clicked.connect(self._fit_preview)
+        preview_tools.addWidget(zoom_out)
+        preview_tools.addWidget(self.preview_zoom_label)
+        preview_tools.addWidget(zoom_in)
+        preview_tools.addWidget(fit_preview)
+        preview_tools.addStretch(1)
         self.mode_combo = QComboBox()
         for label, mode in (("列印＋切割", "print_cut"), ("僅列印", "background"),
                             ("僅切割", "cut_only")):
@@ -482,6 +575,13 @@ class ImportImageDialog(QDialog):
         self.smoothing_spin = SafeDoubleSpinBox()
         self.smoothing_spin.setRange(0, 100)
         self.smoothing_spin.setDecimals(0)
+        self.cut_smoothing_spin = SafeDoubleSpinBox()
+        self.cut_smoothing_spin.setRange(0, .5)
+        self.cut_smoothing_spin.setDecimals(3)
+        self.cut_smoothing_spin.setSingleStep(.02)
+        self.cut_smoothing_spin.setValue(.1)
+        self.cut_smoothing_spin.setSuffix(" mm")
+        self.cut_smoothing_spin.setToolTip(tr("限制刀線偏移；先簡化微小起伏，再保護明顯轉角。不改變列印遮罩。"))
         self.minimum_area = SafeDoubleSpinBox()
         self.minimum_area.setRange(0, 1000)
         self.minimum_area.setDecimals(3)
@@ -495,11 +595,11 @@ class ImportImageDialog(QDialog):
         self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self.opacity_slider.setRange(0, 100)
         self.opacity_slider.setValue(45)
-        self.width_spin = ImageSizeSpinBox()
+        self.width_spin = ImageSizeSpinBox(display_decimals=2)
         self.width_spin.setRange(0.000001, 300)
         self.width_spin.setDecimals(8)
         self.width_spin.setSuffix(" mm")
-        self.height_spin = ImageSizeSpinBox()
+        self.height_spin = ImageSizeSpinBox(display_decimals=2)
         self.height_spin.setRange(0.000001, 300)
         self.height_spin.setDecimals(8)
         self.height_spin.setSuffix(" mm")
@@ -529,7 +629,8 @@ class ImportImageDialog(QDialog):
         form.addRow(self.add_color_button, self.clear_colors_button)
         form.addRow(self.color_summary)
         form.addRow(tr("顏色容差"), self.tolerance_spin)
-        form.addRow(tr("輪廓平滑"), self.smoothing_spin)
+        form.addRow(tr("描邊簡化"), self.smoothing_spin)
+        form.addRow(tr("刀線平滑"), self.cut_smoothing_spin)
         form.addRow(tr("最小輪廓面積"), self.minimum_area)
         form.addRow(tr("輪廓偏移"), self.offset_spin)
         form.addRow(tr("圖片寬度"), self.width_spin)
@@ -545,6 +646,7 @@ class ImportImageDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         preview_column = QVBoxLayout()
+        preview_column.addLayout(preview_tools)
         preview_column.addWidget(self.preview_label, 1)
         settings_widget = QWidget()
         settings_widget.setLayout(form)
@@ -573,7 +675,7 @@ class ImportImageDialog(QDialog):
         self.mode_combo.currentIndexChanged.connect(self._update_controls)
         # mode_combo already refreshes the preview through _update_controls.
         for control in (self.invert_check, self.holes_check,
-                        self.smoothing_spin, self.offset_spin, self.clip_check,
+                        self.smoothing_spin, self.cut_smoothing_spin, self.offset_spin, self.clip_check,
                         self.opacity_slider, self.tolerance_spin, self.bleed_spin, self.minimum_area):
             signal = getattr(control, "currentIndexChanged", None) or getattr(control, "toggled", None)
             if signal is None:
@@ -635,7 +737,7 @@ class ImportImageDialog(QDialog):
         self.mode_combo.setAccessibleDescription(mode_help)
         tracing = mode != "background"
         for control in (self.mask_mode_combo, self.invert_check, self.holes_check,
-                        self.smoothing_spin, self.minimum_area, self.offset_spin,
+                        self.smoothing_spin, self.cut_smoothing_spin, self.minimum_area, self.offset_spin,
                         self.clip_check, self.opacity_slider):
             control.setEnabled(tracing)
         color_mode = tracing and self.mask_mode_combo.currentData() == "background"
@@ -673,7 +775,9 @@ class ImportImageDialog(QDialog):
                 "colors": self.foreground_colors[:],
                 "background": self.background_color.name(), "tolerance": int(self.tolerance_spin.value()),
                 "inverted": self.invert_check.isChecked(), "keep_holes": self.holes_check.isChecked(),
-                "smoothing": int(self.smoothing_spin.value()), "minimum_area_mm2": self.minimum_area.value(),
+                "smoothing": int(self.smoothing_spin.value()),
+                "cut_smoothing_mm": self.cut_smoothing_spin.value(),
+                "minimum_area_mm2": self.minimum_area.value(),
                 "offset_mm": self.offset_spin.value(), "width_mm": self.width_spin.value(),
                 "height_mm": self.height_spin.value(), "bleed_mm": self.bleed_spin.value(),
                 "bleed_color": self.bleed_color.name(), "clip": self.clip_check.isChecked()}
@@ -705,20 +809,33 @@ class ImportImageDialog(QDialog):
         if is_print and self.bleed_spin.value():
             view = view.united((bleed_path * to_mm).boundingRect())
         factor = min((max_size.width()-16) / view.width(), (max_size.height()-16) / view.height())
-        canvas = QImage(max_size, QImage.Format.Format_ARGB32_Premultiplied)
+        self._preview_buffer_size = max_size
+        self._preview_view = view
+        self._preview_fit_scale = factor
+        self._preview_paths = raw_path, cut_path, bleed_path
+        self._render_preview()
+
+    def _render_preview(self) -> None:
+        raw_path, cut_path, bleed_path = self._preview_paths
+        canvas = QImage(self._preview_buffer_size, QImage.Format.Format_ARGB32_Premultiplied)
         canvas.fill(QColor("#edf0ee"))
         painter = QPainter(canvas)
         try:
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-            painter.translate((canvas.width()-view.width()*factor)/2-view.left()*factor,
-                              (canvas.height()-view.height()*factor)/2-view.top()*factor)
+            factor = self._preview_fit_scale * self.preview_zoom
+            painter.translate((canvas.width()-self._preview_view.width()*factor)/2
+                              - self._preview_view.left()*factor + self.preview_pan.x(),
+                              (canvas.height()-self._preview_view.height()*factor)/2
+                              - self._preview_view.top()*factor + self.preview_pan.y())
+            sx = self.width_spin.value() / self.image.width()
+            sy = self.height_spin.value() / self.image.height()
             painter.scale(factor*sx, factor*sy)
             self.preview_to_source, _ = painter.worldTransform().inverted()
-            if is_print and self.bleed_spin.value():
+            if self.mode_combo.currentData() == "print_cut" and self.bleed_spin.value():
                 painter.fillPath(bleed_path, self.bleed_color)
             painter.save()
-            if self.clip_check.isChecked() and is_print:
+            if self.clip_check.isChecked() and self.mode_combo.currentData() == "print_cut":
                 painter.setClipPath(raw_path)
             painter.drawImage(0, 0, self.image)
             painter.restore()
@@ -742,6 +859,33 @@ class ImportImageDialog(QDialog):
                 painter.end()
         self.preview_layers = canvas, cut_layer, raw_path
         self._show_preview_layers()
+
+    def _zoom_preview_at(self, label_point: QPointF, factor: float) -> None:
+        if not hasattr(self, "preview_layers"):
+            return
+        canvas = self.preview_layers[0]
+        offset = QPointF((self.preview_label.width() - canvas.width()) / 2,
+                         (self.preview_label.height() - canvas.height()) / 2)
+        point = label_point - offset
+        source_point = self.preview_to_source.map(point)
+        self.preview_zoom = max(.1, min(16., self.preview_zoom * factor))
+        self.preview_zoom_label.setText(f"{round(self.preview_zoom * 100)}%")
+        self.preview_pan = QPointF()
+        self._render_preview()
+        base_point = self.preview_to_source.inverted()[0].map(source_point)
+        self.preview_pan = point - base_point
+        self._render_preview()
+
+    def _pan_preview(self, delta: QPointF) -> None:
+        self.preview_pan += delta
+        self._render_preview()
+
+    def _fit_preview(self) -> None:
+        self.preview_zoom = 1.0
+        self.preview_pan = QPointF()
+        self.preview_zoom_label.setText("100%")
+        if hasattr(self, "preview_layers"):
+            self._render_preview()
 
     def _show_preview_layers(self) -> None:
         canvas, cut_layer, raw_path = self.preview_layers

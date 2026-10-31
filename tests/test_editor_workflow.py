@@ -42,7 +42,7 @@ class EditorWorkflowTests(unittest.TestCase):
         with patch.object(self.window, "_confirm_unsaved_changes", return_value="discard"):
             self.window.close()
 
-    def test_application_event_filter_only_while_shown_on_x11(self):
+    def test_application_event_filter_only_while_shown_on_each_platform(self):
         calls = []
         original = VeronaWindow.eventFilter
 
@@ -56,14 +56,13 @@ class EditorWorkflowTests(unittest.TestCase):
             return self.window in calls
 
         with patch.object(VeronaWindow, "eventFilter", spy):
-            self.window.show()
-            self.assertFalse(probe())
-            self.window.hide()
-            with patch.object(QApplication, "platformName", return_value="xcb"):
-                self.window.show()
-                self.assertTrue(probe())
-                self.window.hide()
-                self.assertFalse(probe())
+            for platform in ("offscreen", "xcb"):
+                with self.subTest(platform=platform), \
+                        patch.object(QApplication, "platformName", return_value=platform):
+                    self.window.show()
+                    self.assertTrue(probe())
+                    self.window.hide()
+                    self.assertFalse(probe())
 
     def test_another_window_does_not_repolish_the_whole_application(self):
         with patch.object(QApplication, "setStyle") as style, \
@@ -251,7 +250,7 @@ class EditorWorkflowTests(unittest.TestCase):
     def test_space_drag_pans_scrollbars(self):
         self.window.resize(850, 600)
         self.window.show()
-        self.window.canvas.set_zoom(4.0)
+        self.window.change_zoom(4.0 / self.window.canvas.zoom)
         self.app.processEvents()
         horizontal = self.window.canvas_scroll.horizontalScrollBar()
         vertical = self.window.canvas_scroll.verticalScrollBar()

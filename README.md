@@ -9,26 +9,38 @@ arrange a sheet, print at actual size, and send a cut over local Wi-Fi.
 No account, subscription or cloud upload. Installation downloads dependencies;
 normal editing and cutting work offline.
 
-![Current Verona interface with document tabs, a grouped toolbar, six contour stickers, layers and post-edit controls.](docs/assets/editor-dark.png)
+![Verona workspace with document tabs, file and import controls at the upper left, zoom at the upper right, fixed top and left rulers, Insert menu, centered page, and right-panel output controls.](docs/assets/editor-dark.png)
 
 ## Features
 
-- **Artwork and paths:** import SVG vectors, raster images and PDF pages; draw
-  shapes and text outlines; edit nodes, curves, masks and traced contours.
+- **Artwork and paths:** import SVG vectors, raster images and PDF pages; drop
+  one or more images into the workspace to open the import preview; draw shapes and text
+  outlines; edit nodes, curves, masks and traced contours. In the image preview,
+  use the wheel to zoom around the pointer, middle-drag or Space+left-drag to pan,
+  and **Fit** to reset the view.
 - **Layout and layers:** move, resize, rotate, mirror, group, align, distribute
   and automatically arrange artwork. Control visibility, locking, stacking
   order, printing and cutting per object.
 - **Post-edit:** adjust outer bleed and inner fill on multiple existing images,
   extend edge colors or use a solid color, restore supported original LDS
-  bleed, and edit individual image masks without reimporting.
+  bleed, and edit individual image masks without reimporting. **Smooth cutlines…**
+  previews the original against the result and applies a maximum millimetre offset
+  to selected vector or image cutlines; the edit is undoable. Smoothing may reduce
+  short segments and turns; no physical speed benchmark is available.
 - **Printing:** preview and print at 100% actual size, export PDF, configure
   Print & Cut marks, and apply measured alignment corrections.
 - **Saved settings:** retain printer/media preferences and cut passes,
   speed, force and tool settings in designs. Printer preferences also have
   a local last-used fallback.
 - **Workspace:** multiple document tabs, undo/redo, collapsible inspector
-  sections, a toolbar that adapts to narrow windows, and wheel-safe dropdowns
-  and numeric fields. English/Traditional Chinese and light/dark themes.
+  sections, and wheel-safe controls. Opening a design fits the page height;
+  `Ctrl+0` fits it again. File/import tools are at the upper left; shapes and
+  text are under **Insert**. Zoom controls are at the upper right, separate from
+  the file tools. Fixed rulers along the workspace's top and left edges stay in
+  place as the canvas scrolls, with ticks tracking the view. The bottom status
+  strip is compact and shows Stop only while sending; cut preview/export/send
+  are in the right panel. Shift+wheel zooms the main canvas in either direction
+  around the pointer. English/Traditional Chinese and light/dark themes.
 - **Desktop integration:** double-click designs into the existing workspace,
   reuse tabs for already-open files, and show LDS thumbnails in supported file managers.
 - **Local tools:** a dry-run-first CLI, read-only cutter information,
@@ -98,19 +110,29 @@ Reinstalling is required after pulling changes when installed with `pip install 
 
 ## Everyday workflow
 
-1. **Open or import.** Open `.lds` or `.jdesign` in a tab, or import artwork.
+1. **Open or import.** Open `.lds` or `.jdesign` in a tab; the page fits the
+   workspace height. Press `Ctrl+0` to fit it again. Import artwork from the
+   top controls, or drop one or more images into the workspace to open the import preview.
+   In the preview, wheel to zoom around the pointer, middle-drag or Space+left-drag
+   to pan, and choose **Fit** to reset the view. New image imports use 0.10 mm cutline
+   smoothing by default (range 0–0.5 mm; 0 disables it); older designs are not changed
+   automatically.
    Images can be **Print only**, **Cut only**, or **Print and cut**; change their
    output later while retaining the source image.
-2. **Edit and arrange.** Adjust paths and layers, arrange copies, or select
-   existing images and use **Post-edit → Add / adjust bleed…**.
+2. **Edit and arrange.** Add shapes and text outlines from **Insert**, adjust
+   paths and layers, arrange copies, or select existing images and use
+   **Post-edit → Add / adjust bleed…**. Use **Post-edit → Smooth cutlines…** to
+   compare and apply a bounded smoothing edit to selected vector or image cutlines;
+   undo restores the original paths.
 3. **Set up the sheet.** Choose paper dimensions and, for Print & Cut, matching
    registration marks. Print-only sheets do not require registration marks.
 4. **Print.** Use the toolbar button beside the import controls or `Ctrl+P`.
    Verona provides the preview; **Printer and media settings…** opens Qt's
    Linux print dialog with the installed printer driver's options.
-5. **Review and cut.** Enter the cutter's displayed IPv4 address under
-   **Connection**, check the connection, review tool/force/speed and
-   **Cut passes** (1–10), then explicitly send the job.
+5. **Review and cut.** Use the fixed controls at the bottom of the right panel
+   for cut preview, PLT export or sending. Enter the cutter's displayed IPv4
+   address under **Connection**, check the connection, review tool/force/speed
+   and **Cut passes** (1–10), then explicitly send the job.
 
 Previewing or changing print settings does not submit a job. After successful
 submission, printer/media preferences are remembered locally and included when
@@ -121,6 +143,11 @@ Hidden layers are excluded from print and cut output; locked layers still
 output but cannot be edited. Cuts are checked against the workspace and active
 registration frame. Failed transfers are never automatically replayed.
 A connection check reads a version; it does not establish machine readiness.
+
+During transfer, **Stop sending** stops further data from the computer. It
+cannot withdraw data already received by the cutter or confirm that it has stopped.
+To cancel a streaming job, stop sending in Verona before cancelling on the cutter.
+Panel cancellation is not a verified way to stop the computer's upload.
 
 For a first cut, remove the blade holder or use a pen. Secure the material,
 clear the travel area and choose force/speed for the material. Verona has no

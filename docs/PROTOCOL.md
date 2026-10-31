@@ -21,8 +21,16 @@ the same connection. Connect timeout is 2 seconds, write timeout is up to
 60 seconds, and the total budget is at least 300 seconds, extended for large
 paced jobs. Interrupted jobs are never reconnected or automatically replayed.
 
-There is no verified job-completion acknowledgement or emergency-stop command
-in this implementation. Byte counts report local socket acceptance only.
+During upload, a closed/reset connection or any unrecognized incoming device
+data stops further transmission. Incoming data is not treated as a completion
+acknowledgement. There is no verified remote emergency-stop command; byte
+counts report local socket acceptance only.
+
+The GUI's **Stop sending** cancels subsequent writes, including while TCP is
+waiting for the receiver. On interruption, the sender attempts an abortive TCP
+close to discard its local send queue. USB cancellation is checked between
+writes. Neither can withdraw data already received by the cutter, and panel
+cancellation must not be assumed to notify the host.
 
 ## Coordinates and settings
 
@@ -57,10 +65,12 @@ IN;FSIZE600,1000;U SP2;!FS1;VS1;U200,200 D200,1000 D600,1000 D600,200 D200,200 U
 Ordinary jobs finish with a raised move to protocol `(0,0)`. The physical
 origin depends on the machine's loading/setup state; validate it with a pen.
 
-Cut passes are a host-side setting from 1 through 10 (default 1). Each
-contour's raised start and tool-down trace are repeated consecutively inside
-one job. Initialization, registration and finalization are not replayed per
-pass. A transfer failure still never triggers automatic job replay.
+Cut passes are a host-side setting from 1 through 10 (default 1). Closed
+contours repeat their tool-down trace continuously before lifting for the next
+contour. Open contours return to their start with the tool raised between
+passes to avoid cutting an extra connecting line. Closure is determined after
+coordinate quantization. Initialization, settings, registration and finalization
+are not replayed per pass. A transfer failure never triggers automatic job replay.
 
 ## Print & Cut
 

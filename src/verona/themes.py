@@ -47,7 +47,7 @@ def stylesheet(c):
         QMainWindow, QWidget {{ background: {c['background']}; color: {c['text']}; }}
         QLabel {{ background: transparent; }}
         QFrame#inspector, QFrame#layers {{ background: {c['surface']}; border: 0; }}
-        QToolBar#designTools {{ background: transparent; border: 0; spacing: 6px; padding: 0; }}
+        QToolBar#designTools, QToolBar#viewTools {{ background: transparent; border: 0; spacing: 6px; padding: 0; }}
         QToolBar#designTools::separator {{ background: {c['separator']}; width: 1px; margin: 4px 6px; }}
         QTreeView {{ background: {c['input']}; border: 1px solid {c['border']}; border-radius: 6px; selection-background-color: {c['selection']}; selection-color: {c['selection_text']}; }}
         QTreeView::item {{ min-height: 26px; }}
@@ -61,7 +61,9 @@ def stylesheet(c):
         QToolButton#sectionToggle:focus {{ outline: 1px solid {c['accent']}; }}
         QPushButton#primary {{ color: white; background: {c['primary']}; border-color: {c['primary']}; font-weight: 600; padding: 7px; }}
         QPushButton#primary:hover {{ background: {c['primary_hover']}; }}
-        QToolButton:disabled, QPushButton:disabled, QPushButton#primary:disabled {{ color: {c['disabled']}; background: {c['surface']}; border-color: {c['border']}; }}
+        QPushButton#stopTransfer {{ color: {c['warning_text']}; background: {c['warning_background']}; border-color: {c['warning_border']}; }}
+        QPushButton#stopTransfer:hover {{ border-color: {c['warning_text']}; }}
+        QToolButton:disabled, QPushButton:disabled, QPushButton#primary:disabled, QPushButton#stopTransfer:disabled {{ color: {c['disabled']}; background: {c['surface']}; border-color: {c['border']}; }}
         QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{ background: {c['input']}; border: 1px solid {c['border']}; border-radius: 6px; padding: 3px 6px; selection-background-color: {c['selection']}; selection-color: {c['selection_text']}; }}
         QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {{ border-color: {c['accent']}; }}
         QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabled {{ color: {c['disabled']}; }}

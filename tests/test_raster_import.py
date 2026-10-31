@@ -10,6 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QByteArray, QBuffer, QIODevice, Qt
 from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialogButtonBox, QScrollArea
 
 from verona.editor_widgets import SafeDoubleSpinBox
@@ -329,6 +330,61 @@ class RasterImportTests(unittest.TestCase):
         item = dialog.build_items()[0]
         self.assertAlmostEqual(item["image_transform"][2], item["image_transform"][5])
         dialog.close()
+
+    def test_image_dimensions_use_compact_display_without_rounding_values_or_output(self):
+        image = QImage(16, 9, QImage.Format.Format_RGBA8888)
+        image.fill(QColor("red"))
+        dialog = ImportImageDialog(image, "precision")
+        dialog.show()
+        self.app.processEvents()
+        width, height = dialog.width_spin, dialog.height_spin
+        initial_values = width.value(), height.value()
+        initial_items = dialog.build_items()
+        changed = []
+        width.valueChanged.connect(lambda _value: changed.append("width"))
+        height.valueChanged.connect(lambda _value: changed.append("height"))
+
+        self.assertEqual(width.decimals(), 8)
+        self.assertEqual(height.decimals(), 8)
+        self.assertRegex(width.text(), r"\d+\.\d{2} mm$")
+        self.assertRegex(height.text(), r"\d+\.\d{2} mm$")
+        self.assertAlmostEqual(width.value() / height.value(), 16 / 9, places=8)
+
+        width.setFocus()
+        self.app.processEvents()
+        self.assertEqual(width.lineEdit().text(),
+                         width.locale().toString(initial_values[0], "f", 8) + " mm")
+        height.setFocus()
+        self.app.processEvents()
+        self.assertEqual(width.value(), initial_values[0])
+        self.assertEqual(height.value(), initial_values[1])
+        self.assertEqual(dialog.build_items(), initial_items)
+        self.assertRegex(width.text(), r"\d+\.\d{2} mm$")
+        self.assertEqual(changed, [])
+
+        buttons = dialog.findChild(QDialogButtonBox)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).click()
+        self.assertEqual((width.value(), height.value()), initial_values)
+        self.assertEqual(dialog.build_items(), initial_items)
+        self.assertEqual(changed, [])
+        dialog.close()
+
+        typed_dialog = ImportImageDialog(image, "precision")
+        typed_dialog.show()
+        self.app.processEvents()
+        width, height = typed_dialog.width_spin, typed_dialog.height_spin
+        width.setFocus()
+        self.app.processEvents()
+        width.lineEdit().selectAll()
+        QTest.keyClicks(width.lineEdit(), "7.12345678")
+        height.setFocus()
+        self.app.processEvents()
+        self.assertAlmostEqual(width.value(), 7.12345678, places=8)
+        self.assertRegex(width.text(), r"7\.12 mm$")
+        self.assertAlmostEqual(width.value() / height.value(), 16 / 9, places=8)
+        self.assertAlmostEqual(typed_dialog.build_items()[0]["image_transform"][2],
+                               typed_dialog.build_items()[0]["image_transform"][5], places=8)
+        typed_dialog.close()
 
 
 if __name__ == "__main__":

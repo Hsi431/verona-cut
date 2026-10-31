@@ -14,7 +14,7 @@ from PySide6.QtGui import QKeyEvent, QMouseEvent
 from PySide6.QtWidgets import QApplication, QFileDialog
 
 from verona.i18n import set_language
-from verona.ui import PAGE_MARGIN, VeronaWindow, _item_path
+from verona.ui import VeronaWindow, _item_path
 
 
 class TransformHandleTests(unittest.TestCase):
@@ -46,7 +46,9 @@ class TransformHandleTests(unittest.TestCase):
 
     def _send_mouse(self, event_type, world, *, button, buttons, modifiers=Qt.KeyboardModifier.NoModifier):
         canvas = self.window.canvas
-        local = QPointF(34 + world.x() * canvas.zoom, 34 + world.y() * canvas.zoom)
+        origin = canvas.canvas_origin()
+        local = QPointF(origin.x() + world.x() * canvas.zoom,
+                        origin.y() + world.y() * canvas.zoom)
         global_pos = QPointF(canvas.mapToGlobal(local.toPoint()))
         event = QMouseEvent(event_type, local, global_pos, button, buttons, modifiers)
         QApplication.sendEvent(canvas, event)
@@ -97,7 +99,8 @@ class TransformHandleTests(unittest.TestCase):
         self.window.refresh_all()
         self.window.select(0)
         canvas = self.window.canvas
-        start = QPointF(PAGE_MARGIN + 30 * canvas.zoom, PAGE_MARGIN + 10 * canvas.zoom)
+        origin = canvas.canvas_origin()
+        start = QPointF(origin.x() + 30 * canvas.zoom, origin.y() + 10 * canvas.zoom)
         canvas.mousePressEvent(QMouseEvent(QMouseEvent.Type.MouseButtonPress, start, start,
                                Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier))
         self.assertIsNotNone(canvas.drag_before)

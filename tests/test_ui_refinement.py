@@ -10,7 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QColor, QImage, QPalette
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import (QApplication, QDialog, QDialogButtonBox, QLabel, QMenu,
+from PySide6.QtWidgets import (QApplication, QDialog, QDialogButtonBox, QLabel,
                                QPushButton, QStyleOptionToolButton, QToolButton)
 
 from verona.i18n import set_language, tr
@@ -50,7 +50,7 @@ class UiRefinementTests(unittest.TestCase):
             window.close()
 
     def _action(self, label):
-        return next(action for action in self.window.design_toolbar.actions()
+        return next(action for action in self.window.insert_menu.actions()
                     if action.text() == tr(label))
 
     def _image_item(self, name, x):
@@ -78,31 +78,50 @@ class UiRefinementTests(unittest.TestCase):
     def test_native_toolbar_actions_create_rectangle_and_circle(self):
         for label in ("矩形", "圓形"):
             action = self._action(label)
-            button = self.window.design_toolbar.widgetForAction(action)
-            self.assertIsInstance(button, QToolButton)
-            button.click()
+            action.trigger()
             self.assertEqual(self.window.items[-1]["name"], tr(label))
         self.assertEqual(len(self.window.items), 2)
 
-    def test_narrow_toolbar_keeps_overflow_actions_in_native_menu(self):
-        self.window.show()
-        self.app.processEvents()
-        toolbar = self.window.design_toolbar
-        toolbar.setFixedWidth(300)
-        self.app.processEvents()
+    def test_file_and_zoom_toolbars_share_top_row_above_tabs_in_both_languages(self):
+        for language in ("zh_TW", "en"):
+            with self.subTest(language=language):
+                set_language(language)
+                window = VeronaWindow()
+                self.addCleanup(self._close_window, window)
+                window.resize(1000, 700)
+                window.show()
+                self.app.processEvents()
 
-        extension = toolbar.findChild(QToolButton, "qt_toolbar_ext_button")
-        self.assertIsNotNone(extension)
-        self.assertTrue(extension.isVisible())
-        circle = self._action("圓形")
-        self.assertTrue(toolbar.widgetForAction(circle).isHidden())
-        native_menu = extension.menu()
-        self.assertIsInstance(native_menu, QMenu)
-        self.assertIn(circle, native_menu.actions())
+                toolbar = window.design_toolbar
+                top_level = {action.text() for action in toolbar.actions() if action.text()}
+                self.assertTrue({tr("新增設計"), tr("開啟…"), tr("列印…")} <= top_level)
+                self.assertIsInstance(window.import_button, QToolButton)
+                self.assertEqual({action.text() for action in window.import_button.menu().actions()},
+                                 {tr("匯入圖片"), tr("匯入 SVG"), tr("匯入 PDF／SVG 圖稿")})
+                insert_labels = {action.text() for action in window.insert_menu.actions()}
+                self.assertTrue({tr("矩形"), tr("圓形"), tr("文字輪廓")} <= insert_labels)
+                self.assertNotIn(next(action for action in window.insert_menu.actions()
+                                      if action.text() == tr("圓形")), toolbar.actions())
+                self.assertIn(window.fit_height_action, window.view_toolbar.actions())
+                self.assertTrue(window.view_toolbar.isVisible())
+
+                design_top = toolbar.mapTo(window, toolbar.rect().topLeft()).y()
+                view_top = window.view_toolbar.mapTo(window, window.view_toolbar.rect().topLeft()).y()
+                tabs_top = window.tab_bar.mapTo(window, window.tab_bar.rect().topLeft()).y()
+                self.assertEqual(design_top, view_top)
+                self.assertLess(design_top, tabs_top)
+                status_top = window.status_label.mapTo(window, window.status_label.rect().topLeft()).y()
+                canvas_bottom = window.canvas_scroll.mapTo(
+                    window, window.canvas_scroll.rect().bottomLeft()).y()
+                self.assertGreater(status_top, canvas_bottom)
+
+                idle_height = window.status_label.height()
+                window.change_zoom(4.0)
+                self.app.processEvents()
+                self.assertEqual(window.status_label.height(), idle_height)
 
     def test_geometry_controls_keep_labels_accessible_edit_and_undo(self):
-        button = self.window.design_toolbar.widgetForAction(self._action("矩形"))
-        button.click()
+        self._action("矩形").trigger()
         self.window.saved_snapshot = self.window._document_state()
         self.window._refresh_tab_titles()
 
