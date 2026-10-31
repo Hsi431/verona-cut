@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <title>Verona</title>
+  <desc>Ivory die-cut paper with two leaf-shaped cutouts and a gold peeled corner on a forest teal tile.</desc>
+  <defs>
+    <linearGradient id="teal" x1="0" y1="0" x2="0.8" y2="1">
+      <stop stop-color="#118b7c"/>
+      <stop offset="1" stop-color="#075c54"/>
+    </linearGradient>
+    <linearGradient id="paper" x1="0" y1="0" x2="0.7" y2="1">
+      <stop stop-color="#fffbed"/>
+      <stop offset="1" stop-color="#f1e6cc"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="1" x2="1" y2="0">
+      <stop stop-color="#ac782f"/>
+      <stop offset="0.45" stop-color="#e8c477"/>
+      <stop offset="1" stop-color="#fbdf9b"/>
+    </linearGradient>
+  </defs>
+  <rect x="24" y="29" width="464" height="464" rx="94" fill="#102e2a" opacity="0.18"/>
+  <rect x="24" y="24" width="464" height="464" rx="94" fill="url(#teal)"/>
+  <rect x="25" y="25" width="462" height="462" rx="93" fill="none" stroke="#c1eee0" stroke-opacity="0.16" stroke-width="2"/>
+  <path d="M126 80H342C357 80 368 88 380 101L430 153Q444 169 444 191V384Q444 448 380 448H126Q68 448 68 390V138Q68 80 126 80Z" fill="#063c35" opacity="0.25"/>
+  <path fill="url(#paper)" fill-rule="evenodd" d="M126 72H342C357 72 368 80 380 93L430 145Q444 161 444 183V376Q444 440 380 440H126Q68 440 68 382V130Q68 72 126 72Z
+    M112 170C197 191 249 259 258 390C207 342 150 257 112 170Z
+    M270 390C264 300 303 225 410 178C395 278 340 354 270 390Z"/>
+  <path d="M342 79C358 94 355 115 358 139C361 161 378 173 401 172C421 171 434 174 444 183C425 162 408 147 387 130Z" fill="#87652b" opacity="0.19"/>
+  <path d="M342 72C358 86 350 109 354 134C358 159 375 169 398 165C415 161 430 169 444 183C439 164 427 150 414 137L380 93C368 80 357 72 342 72Z" fill="url(#gold)"/>
+  <path d="M342 72C358 86 350 109 354 134C358 159 375 169 398 165" fill="none" stroke="#fff4ce" stroke-opacity="0.65" stroke-width="1.5"/>
+</svg>

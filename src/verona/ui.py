@@ -21,7 +21,7 @@ from typing import Any
 
 from PySide6.QtCore import QEvent, QLineF, QObject, QPointF, QRunnable, QRectF, Qt, QTemporaryDir, QThreadPool, QSettings, QTimer, Signal, Slot
 from PySide6.QtGui import (
-    QAction, QActionGroup, QColor, QContextMenuEvent, QCursor, QFont, QImage, QPainter, QPainterPath, QPainterPathStroker, QPen, QPixmap,
+    QAction, QActionGroup, QColor, QContextMenuEvent, QCursor, QFont, QIcon, QImage, QPainter, QPainterPath, QPainterPathStroker, QPen, QPixmap,
     QTransform, QPalette,
 )
 from PySide6.QtWidgets import (
@@ -1033,6 +1033,7 @@ class VeronaWindow(QMainWindow):
         if app.font() != QFont("Noto Sans", 10):
             app.setFont(QFont("Noto Sans", 10))
         self.setWindowTitle(tr("Verona"))
+        self.setWindowIcon(QIcon(str(Path(__file__).with_name("icons") / "verona.svg")))
         self.resize(1280, 800)
         self.items: list[dict[str, Any]] = []
         self.selected = -1
@@ -3701,6 +3702,9 @@ def main(argv: list[str] | None = None) -> int:
     settings = QSettings("Verona", "Workspace")
     set_language(options.lang or settings.value("language", os.environ.get("VERONA_LANGUAGE", "en")))
     app = QApplication.instance() or QApplication([sys.argv[0], *qt_args])
+    app.setApplicationName("Verona")
+    app.setDesktopFileName("verona-zh-TW" if get_language() == "zh_TW" else "verona-en")
+    app.setWindowIcon(QIcon(str(Path(__file__).with_name("icons") / "verona.svg")))
     from .desktop_session import DesktopSession
     session = DesktopSession(app)
     try:

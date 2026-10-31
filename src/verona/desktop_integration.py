@@ -19,9 +19,25 @@ def _exec_argument(value):
     return '"' + value.replace("\\", "\\\\") + '"'
 
 
+def _data_home(data_home=None) -> Path:
+    if data_home is not None:
+        return Path(data_home)
+    return Path(os.environ.get("XDG_DATA_HOME") or Path.home()/".local/share")
+
+
+def install_icon(data_home=None) -> Path:
+    """Install Verona's scalable app icon and return its installed path."""
+    icon = Path(__file__).parent/"icons/verona.svg"
+    target = _data_home(data_home)/"icons/hicolor/scalable/apps/verona-cut.svg"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(icon.read_bytes())
+    return target
+
+
 def install_desktop():
     python = _exec_argument(sys.executable)
-    data_home = Path(os.environ.get("XDG_DATA_HOME", Path.home()/".local/share"))
+    data_home = _data_home()
+    install_icon(data_home)
     applications = data_home/"applications"
     mime = data_home/"mime"
     thumbnailers = data_home/"thumbnailers"
@@ -34,7 +50,7 @@ def install_desktop():
             "[Desktop Entry]\nVersion=1.0\nType=Application\n"
             f"Name={name}\nComment={comment}\n"
             f"Exec={python} -m verona.desktop_integration --launch {language.replace('-', '_')} %f\n"
-            "Icon=applications-graphics\nTerminal=false\n"
+            "Icon=verona-cut\nTerminal=false\nStartupWMClass=Verona\n"
             "Categories=Graphics;2DGraphics;VectorGraphics;\nStartupNotify=true\n"
             f"MimeType={DESIGN_MIME};{LDS_MIME};\n", encoding="utf-8")
     (mime/"packages/verona.xml").write_text(

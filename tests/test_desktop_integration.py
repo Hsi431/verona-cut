@@ -109,6 +109,20 @@ class LdsThumbnailTests(unittest.TestCase):
 
 
 class DesktopIntegrationTests(unittest.TestCase):
+    def test_install_icon_is_independent_and_respects_xdg_data_home(self):
+        with tempfile.TemporaryDirectory() as folder:
+            data_home = Path(folder)/"data"
+            with patch.dict(os.environ, {"XDG_DATA_HOME": str(data_home)}), \
+                    patch.object(desktop_integration.subprocess, "run") as run:
+                installed = desktop_integration.install_icon()
+            source = ROOT/"src/verona/icons/verona.svg"
+            self.assertEqual(installed, data_home/"icons/hicolor/scalable/apps/verona-cut.svg")
+            self.assertEqual(installed.read_bytes(), source.read_bytes())
+            self.assertFalse((data_home/"applications").exists())
+            self.assertFalse((data_home/"mime").exists())
+            self.assertFalse((data_home/"thumbnailers").exists())
+            run.assert_not_called()
+
     def test_installer_registers_jdesign_and_lds_only_in_user_data_directories(self):
         with tempfile.TemporaryDirectory() as folder:
             data_home = Path(folder)/"data"
@@ -121,6 +135,10 @@ class DesktopIntegrationTests(unittest.TestCase):
                 text = entry.read_text()
                 self.assertIn(f"Exec={desktop_integration._exec_argument(sys.executable)} -m verona.desktop_integration --launch {argument} %f\n", text)
                 self.assertIn(f"MimeType={desktop_integration.DESIGN_MIME};{desktop_integration.LDS_MIME};\n", text)
+                self.assertIn("Icon=verona-cut\n", text)
+                self.assertIn("StartupWMClass=Verona\n", text)
+            installed_icon = data_home/"icons/hicolor/scalable/apps/verona-cut.svg"
+            self.assertEqual(installed_icon.read_bytes(), (ROOT/"src/verona/icons/verona.svg").read_bytes())
             self.assertIn('<glob pattern="*.lds"/>', (data_home/"mime/packages/verona.xml").read_text())
             self.assertIn('<glob pattern="*.jdesign"/>', (data_home/"mime/packages/verona.xml").read_text())
             self.assertIn("-m verona.thumbnailer %i %o %s", (data_home/"thumbnailers/verona-lds.thumbnailer").read_text())
