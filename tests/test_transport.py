@@ -1,10 +1,13 @@
 import socket
+import select
+import struct
 import threading
 import time
 import unittest
 from unittest.mock import patch
 
-from verona.transport import TCP_PORT, query_tcp_version, send_tcp, send_usb
+from verona.transport import (TCP_PORT, DeviceInterrupted, TransferCancelled,
+                              query_tcp_version, send_tcp, send_usb)
 
 
 class TcpTests(unittest.TestCase):
@@ -12,6 +15,13 @@ class TcpTests(unittest.TestCase):
         pacing = patch("verona.transport.TCP_CHUNK_DELAY", 0)
         pacing.start()
         self.addCleanup(pacing.stop)
+
+    @staticmethod
+    def _ready_select(readers, writers, _errors, _timeout):
+        return [], list(writers), []
+
+    def _patch_fake_select(self):
+        return patch("verona.transport.select.select", side_effect=self._ready_select)
 
     def test_version_query_sends_exact_request_and_reads_segmented_reply(self):
         class Connection:
@@ -78,16 +88,18 @@ class TcpTests(unittest.TestCase):
     def test_no_automatic_retry_after_write_failure(self):
         with patch("verona.transport.socket.create_connection") as connect:
             connect.return_value.__enter__.return_value.send.side_effect = OSError("short connection")
-            with self.assertRaises(OSError):
+            with self._patch_fake_select(), self.assertRaises(OSError):
                 send_tcp(b"IN;", "192.0.2.1")
             self.assertEqual(connect.call_count, 1)
 
     def test_short_socket_writes_continue_only_from_accepted_offset(self):
         class Connection:
-            def __init__(self): self.data, self.sizes, self.timeouts = bytearray(), [], []
+            def __init__(self): self.data, self.sizes, self.timeouts, self.linger = bytearray(), [], [], []
             def __enter__(self): return self
             def __exit__(self, *_args): pass
             def settimeout(self, value): self.timeouts.append(value)
+            def setblocking(self, _value): pass
+            def setsockopt(self, *args): self.linger.append(args)
             def send(self, data):
                 self.sizes.append(len(data))
                 count = min(127, len(data))
@@ -95,28 +107,68 @@ class TcpTests(unittest.TestCase):
                 return count
         connection = Connection()
         payload = bytes(range(256)) * 3000
-        with patch("verona.transport.socket.create_connection", return_value=connection) as connect:
+        with patch("verona.transport.socket.create_connection", return_value=connection) as connect, \
+                self._patch_fake_select():
             self.assertEqual(send_tcp(payload, "192.0.2.1"), len(payload))
         self.assertEqual(connection.data, payload)
         self.assertLessEqual(max(connection.sizes), 1024)
         self.assertTrue(all(value == 60 for value in connection.timeouts))
+        self.assertEqual(connection.linger, [])
         connect.assert_called_once()
 
-    def test_sdk_pacing_and_progress_follow_each_accepted_write(self):
+    def test_cancel_aborts_local_socket_queue_and_does_not_send_more(self):
+        cancel = threading.Event()
         with patch("verona.transport.socket.create_connection") as connect, \
                 patch("verona.transport.TCP_CHUNK_DELAY", .3), \
-                patch("verona.transport.time.sleep") as sleep:
+                self._patch_fake_select():
+            connection = connect.return_value.__enter__.return_value
+
+            def accept_then_cancel(data):
+                cancel.set()
+                return min(1024, len(data))
+
+            connection.send.side_effect = accept_then_cancel
+            with self.assertRaises(TransferCancelled) as caught:
+                send_tcp(b"C" * 4096, "192.0.2.1", cancel_event=cancel)
+            self.assertEqual((caught.exception.bytes_sent, caught.exception.bytes_total),
+                             (1024, 4096))
+            self.assertEqual(connection.send.call_count, 1)
+            connection.setsockopt.assert_called_once_with(
+                socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+
+    def test_linger_failure_does_not_mask_original_write_error(self):
+        with patch("verona.transport.socket.create_connection") as connect, \
+                self._patch_fake_select():
+            connection = connect.return_value.__enter__.return_value
+            connection.send.side_effect = OSError("original write error")
+            connection.setsockopt.side_effect = PermissionError("linger setup failed")
+            with self.assertRaises(OSError) as caught:
+                send_tcp(b"ERR;", "192.0.2.1")
+            self.assertIn("original write error", str(caught.exception))
+            self.assertNotIn("linger setup failed", str(caught.exception))
+
+    def test_sdk_pacing_and_progress_follow_each_accepted_write(self):
+        clock = [0.0]
+        def select(readers, writers, _errors, timeout):
+            if writers:
+                return [], list(writers), []
+            clock[0] += timeout
+            return [], [], []
+        with patch("verona.transport.socket.create_connection") as connect, \
+                patch("verona.transport.TCP_CHUNK_DELAY", .3), \
+                patch("verona.transport.time.monotonic", side_effect=lambda: clock[0]), \
+                patch("verona.transport.select.select", side_effect=select):
             connection = connect.return_value.__enter__.return_value
             connection.send.side_effect = [1024, 476]
             progress = []
             self.assertEqual(send_tcp(b"X" * 1500, "192.0.2.1",
                                       on_progress=lambda sent, total: progress.append((sent, total))), 1500)
             self.assertEqual(progress, [(1024, 1500), (1500, 1500)])
-            self.assertEqual(sleep.call_count, 2)
-            sleep.assert_called_with(.3)
+            self.assertAlmostEqual(clock[0], .6)
 
     def test_partial_timeout_reports_count_without_reconnecting(self):
-        with patch("verona.transport.socket.create_connection") as connect:
+        with patch("verona.transport.socket.create_connection") as connect, \
+                self._patch_fake_select():
             connection = connect.return_value.__enter__.return_value
             connection.send.side_effect = [127, 127, socket.timeout("receiver stalled")]
             with self.assertRaises(TimeoutError) as caught:
@@ -127,11 +179,143 @@ class TcpTests(unittest.TestCase):
             connect.assert_called_once()
             self.assertEqual(connection.send.call_count, 3)
 
-    def test_full_transfer_has_a_total_deadline(self):
+    def test_blocked_nonblocking_send_cannot_continue_after_write_deadline(self):
+        clock = [0.0]
+
+        def select_always_writable(_readers, writers, _errors, timeout):
+            clock[0] += timeout
+            return [], list(writers), []
+
         with patch("verona.transport.socket.create_connection") as connect, \
-                patch("verona.transport.time.monotonic", side_effect=[0, 0, 301]):
+                patch("verona.transport.time.monotonic", side_effect=lambda: clock[0]), \
+                patch("verona.transport.select.select", side_effect=select_always_writable):
             connection = connect.return_value.__enter__.return_value
-            connection.send.return_value = 1024
+            connection.send.side_effect = BlockingIOError()
+            with self.assertRaises(TimeoutError) as caught:
+                send_tcp(b"X" * 2048, "192.0.2.1", write_timeout=.12)
+            self.assertEqual(caught.exception.bytes_sent, 0)
+            self.assertEqual(caught.exception.bytes_total, 2048)
+            self.assertEqual(connection.send.call_count, 2)
+            connect.assert_called_once()
+
+    def test_cancel_during_paced_wait_stops_after_accepted_chunk(self):
+        payload = b"P" * 4096
+        cancel = threading.Event()
+        paced_wait = threading.Event()
+        sender, receiver = socket.socketpair()
+        received = bytearray()
+
+        def cancel_after_chunk():
+            received.extend(receiver.recv(1024))
+            paced_wait.wait(1)
+            cancel.set()
+
+        original_select = select.select
+        def signal_paced_wait(readers, writers, errors, timeout):
+            if not writers:
+                paced_wait.set()
+            return original_select(readers, writers, errors, timeout)
+
+        thread = threading.Thread(target=cancel_after_chunk, daemon=True)
+        thread.start()
+        try:
+            with patch("verona.transport.socket.create_connection", return_value=sender), \
+                    patch("verona.transport.TCP_CHUNK_DELAY", .5), \
+                    patch("verona.transport.select.select", side_effect=signal_paced_wait):
+                with self.assertRaises(TransferCancelled) as caught:
+                    send_tcp(payload, "127.0.0.1", cancel_event=cancel)
+            self.assertEqual((caught.exception.bytes_sent, caught.exception.bytes_total),
+                             (1024, len(payload)))
+            self.assertEqual(received, payload[:1024])
+            self.assertTrue(paced_wait.is_set())
+            thread.join(1)
+            self.assertFalse(thread.is_alive())
+        finally:
+            sender.close()
+            receiver.close()
+
+    def test_peer_fin_during_pacing_stops_without_replay(self):
+        payload = b"F" * 4096
+        sender, receiver = socket.socketpair()
+        received = bytearray()
+
+        def close_after_chunk():
+            received.extend(receiver.recv(1024))
+            receiver.close()
+
+        thread = threading.Thread(target=close_after_chunk, daemon=True)
+        thread.start()
+        try:
+            with patch("verona.transport.socket.create_connection", return_value=sender), \
+                    patch("verona.transport.TCP_CHUNK_DELAY", .5):
+                with self.assertRaises(DeviceInterrupted) as caught:
+                    send_tcp(payload, "127.0.0.1")
+            self.assertEqual((caught.exception.bytes_sent, caught.exception.bytes_total),
+                             (1024, len(payload)))
+            self.assertEqual(received, payload[:1024])
+            thread.join(1)
+            self.assertFalse(thread.is_alive())
+        finally:
+            sender.close()
+            receiver.close()
+
+    def test_unexpected_peer_data_during_pacing_stops_without_more_bytes(self):
+        payload = b"E" * 4096
+        sender, receiver = socket.socketpair()
+        received = bytearray()
+
+        def reply_after_chunk():
+            received.extend(receiver.recv(1024))
+            receiver.sendall(b"ERR=VS;")
+
+        thread = threading.Thread(target=reply_after_chunk, daemon=True)
+        thread.start()
+        try:
+            with patch("verona.transport.socket.create_connection", return_value=sender), \
+                    patch("verona.transport.TCP_CHUNK_DELAY", .5):
+                with self.assertRaises(DeviceInterrupted) as caught:
+                    send_tcp(payload, "127.0.0.1")
+            self.assertEqual((caught.exception.bytes_sent, caught.exception.bytes_total),
+                             (1024, len(payload)))
+            self.assertEqual(received, payload[:1024])
+            thread.join(1)
+            self.assertFalse(thread.is_alive())
+        finally:
+            sender.close()
+            receiver.close()
+
+    def test_cancel_interrupts_a_blocked_socket_write(self):
+        payload = b"B" * (8 * 1024 * 1024)
+        cancel = threading.Event()
+        sender, receiver = socket.socketpair()
+        timer = threading.Timer(.1, cancel.set)
+        timer.start()
+        try:
+            with patch("verona.transport.socket.create_connection", return_value=sender), \
+                    patch("verona.transport.TCP_CHUNK_DELAY", 0):
+                started = time.monotonic()
+                with self.assertRaises(TransferCancelled) as caught:
+                    send_tcp(payload, "127.0.0.1", cancel_event=cancel)
+                elapsed = time.monotonic() - started
+            self.assertGreater(caught.exception.bytes_sent, 0)
+            self.assertLess(caught.exception.bytes_sent, len(payload))
+            self.assertEqual(caught.exception.bytes_total, len(payload))
+            self.assertLess(elapsed, 1.0)
+        finally:
+            timer.cancel()
+            sender.close()
+            receiver.close()
+
+    def test_full_transfer_has_a_total_deadline(self):
+        clock = [0.0]
+        def send_then_expire(_data):
+            clock[0] = 301.0
+            return 1024
+        with patch("verona.transport.socket.create_connection") as connect, \
+                patch("verona.transport.time.monotonic", side_effect=lambda: clock[0]), \
+                self._patch_fake_select():
+            connection = connect.return_value.__enter__.return_value
+            connection.send.side_effect = send_then_expire
             with self.assertRaises(TimeoutError) as caught:
                 send_tcp(b"X" * 5000, "192.0.2.1")
             self.assertEqual(caught.exception.bytes_sent, 1024)
@@ -148,19 +332,23 @@ class TcpTests(unittest.TestCase):
                     def __enter__(self): return self
                     def __exit__(self, *_args): pass
                     def settimeout(self, _timeout): pass
+                    def setblocking(self, _value): pass
                     def send(self, data):
                         accepted = bytes(data[:max_write])
                         self.data.extend(accepted)
                         return len(accepted)
 
-                def sleep(delay):
-                    clock[0] += delay
-
                 connection = Connection()
+                clock = [0.0]
+                def select(readers, writers, _errors, timeout):
+                    if writers:
+                        return [], list(writers), []
+                    clock[0] += timeout
+                    return [], [], []
                 with patch("verona.transport.socket.create_connection", return_value=connection) as connect, \
                         patch("verona.transport.TCP_CHUNK_DELAY", .3), \
                         patch("verona.transport.time.monotonic", side_effect=lambda: clock[0]), \
-                        patch("verona.transport.time.sleep", side_effect=sleep):
+                        patch("verona.transport.select.select", side_effect=select):
                     self.assertEqual(send_tcp(payload, "192.0.2.1"), len(payload))
                 self.assertEqual(connection.data, payload)
                 self.assertGreater(clock[0], 300)
@@ -282,6 +470,51 @@ class UsbTests(unittest.TestCase):
                 send_usb(b"IN;", device)
             release.assert_called_once_with(device, 2)
             dispose.assert_called_once_with(device)
+
+    def test_cancel_between_usb_writes_stops_and_reports_accepted_bytes(self):
+        cancel = threading.Event()
+
+        class CancellingEndpoint(Endpoint):
+            def write(self, chunk, timeout):
+                count = min(127, len(chunk))
+                self.data.extend(chunk[:count])
+                cancel.set()
+                return count
+
+        outgoing = CancellingEndpoint(1)
+        device = Device([Interface([Endpoint(0x81), outgoing])])
+        payload = b"U" * 1000
+        with patch("usb.util.claim_interface"), \
+                patch("usb.util.release_interface") as release, \
+                patch("usb.util.dispose_resources") as dispose:
+            with self.assertRaises(TransferCancelled) as caught:
+                send_usb(payload, device, cancel_event=cancel)
+        self.assertEqual((caught.exception.bytes_sent, caught.exception.bytes_total),
+                         (127, len(payload)))
+        self.assertEqual(outgoing.data, payload[:127])
+        release.assert_called_once_with(device, 2)
+        dispose.assert_called_once_with(device)
+
+    def test_cancel_set_by_final_usb_write_is_not_reported_as_success(self):
+        cancel = threading.Event()
+
+        class CancellingEndpoint(Endpoint):
+            def write(self, chunk, timeout):
+                self.data.extend(chunk)
+                cancel.set()
+                return len(chunk)
+
+        outgoing = CancellingEndpoint(1)
+        device = Device([Interface([Endpoint(0x81), outgoing])])
+        payload = b"U" * 127
+        with patch("usb.util.claim_interface"), \
+                patch("usb.util.release_interface"), \
+                patch("usb.util.dispose_resources"):
+            with self.assertRaises(TransferCancelled) as caught:
+                send_usb(payload, device, cancel_event=cancel)
+        self.assertEqual((caught.exception.bytes_sent, caught.exception.bytes_total),
+                         (len(payload), len(payload)))
+        self.assertEqual(outgoing.data, payload)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,9 @@ No discovery probes, preamble, acknowledgement or automatic retries. Returning
 success means bytes were delivered to the transport, not that a cut completed.
 """
 import ipaddress
+import select
 import socket
+import struct
 import time
 
 from .i18n import tr
@@ -13,6 +15,63 @@ USB_VENDOR = 0x0483
 USB_PRODUCT = 0x5750
 TCP_PORT = 8080
 TCP_CHUNK_DELAY = 0.3  # Pace consecutive writes for the cutter's receive buffer.
+
+
+class TransferInterrupted(ConnectionError):
+    def __init__(self, message, bytes_sent, bytes_total):
+        super().__init__(message)
+        self.bytes_sent = bytes_sent
+        self.bytes_total = bytes_total
+
+
+class TransferCancelled(TransferInterrupted):
+    pass
+
+
+class DeviceInterrupted(TransferInterrupted):
+    pass
+
+
+def _raise_if_cancelled(cancel_event, sent, total):
+    if cancel_event is not None and cancel_event.is_set():
+        raise TransferCancelled(
+            tr("傳輸已取消：本機已接受 {sent}/{total} bytes；已送資料可能仍在裝置緩衝區。",
+               sent=sent, total=total), sent, total)
+
+
+def _wait_tcp_ready(connection, *, writable, deadline, cancel_event, sent, total):
+    """Wait briefly at a time so cancellation and unexpected input stay visible."""
+    while True:
+        _raise_if_cancelled(cancel_event, sent, total)
+        now = time.monotonic()
+        if now >= deadline:
+            if writable:
+                raise TimeoutError("TCP write timed out")
+            return
+        wait = min(0.05, max(0.0, deadline - now))
+        readable, can_write, _ = select.select(
+            [connection], [connection] if writable else [], [], wait)
+        if readable:
+            try:
+                incoming = connection.recv(1, socket.MSG_PEEK)
+            except BlockingIOError:
+                incoming = None
+            if incoming == b"":
+                raise DeviceInterrupted(
+                    tr("裝置已中斷傳輸：本機已接受 {sent}/{total} bytes。",
+                       sent=sent, total=total), sent, total)
+            if incoming:
+                raise DeviceInterrupted(
+                    tr("收到無法識別的裝置資料，已停止傳輸：本機已接受 {sent}/{total} bytes。",
+                       sent=sent, total=total), sent, total)
+        _raise_if_cancelled(cancel_event, sent, total)
+        now = time.monotonic()
+        if now >= deadline:
+            if writable:
+                raise TimeoutError("TCP write timed out")
+            return
+        if writable and can_write:
+            return
 
 
 def _ipv4_endpoint(host, port):
@@ -24,9 +83,12 @@ def _ipv4_endpoint(host, port):
     return str(address)
 
 
-def send_tcp(payload, host, port=TCP_PORT, timeout=2.0, *, write_timeout=60.0, on_progress=None):
+def send_tcp(payload, host, port=TCP_PORT, timeout=2.0, *, write_timeout=60.0,
+             on_progress=None, cancel_event=None):
     """Stream raw PLT in paced chunks, without reconnecting or replaying.
 
+    Failed transfers abort the local TCP send queue when possible; bytes already
+    received by the cutter cannot be withdrawn.
     Connection setup has its own short timeout. A slow receiver may pause each
     write for up to write_timeout. The total budget is at least five minutes,
     or the expected pacing time plus one minute for larger jobs. Short
@@ -36,34 +98,71 @@ def send_tcp(payload, host, port=TCP_PORT, timeout=2.0, *, write_timeout=60.0, o
     address = _ipv4_endpoint(host, port)
     if not payload:
         raise ValueError(tr("沒有可傳送的切割資料"))
+    _raise_if_cancelled(cancel_event, 0, len(payload))
     with socket.create_connection((address, port), timeout=timeout) as connection:
         sent = 0
         chunks = (len(payload) + 1023) // 1024
         deadline = time.monotonic() + max(300.0, chunks * TCP_CHUNK_DELAY + 60.0)
         data = memoryview(payload)
+        completed = False
         try:
             while sent < len(data):
+                _raise_if_cancelled(cancel_event, sent, len(data))
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise TimeoutError("transfer deadline exceeded")
-                connection.settimeout(min(write_timeout, remaining))
                 chunk = data[sent:sent + 1024]
-                count = connection.send(chunk)
+                connection.settimeout(min(write_timeout, remaining))
+                connection.setblocking(False)
+                write_deadline = min(time.monotonic() + write_timeout, deadline)
+                while True:
+                    _wait_tcp_ready(connection, writable=True, deadline=write_deadline,
+                                    cancel_event=cancel_event, sent=sent, total=len(data))
+                    try:
+                        count = connection.send(chunk)
+                        break
+                    except BlockingIOError:
+                        continue
                 if count == 0:
-                    raise ConnectionError("connection closed")
+                    raise DeviceInterrupted(
+                        tr("裝置已中斷傳輸：本機已接受 {sent}/{total} bytes。",
+                           sent=sent, total=len(data)), sent, len(data))
+                if count < 0 or count > len(chunk):
+                    raise OSError("invalid socket write count")
                 if count < len(chunk):
                     deadline += TCP_CHUNK_DELAY  # Budget the extra paced write.
                 sent += count
                 if on_progress is not None:
                     on_progress(sent, len(data))
                 if TCP_CHUNK_DELAY:
-                    time.sleep(TCP_CHUNK_DELAY)
+                    _wait_tcp_ready(connection, writable=False,
+                                    deadline=time.monotonic() + TCP_CHUNK_DELAY,
+                                    cancel_event=cancel_event, sent=sent, total=len(data))
+            completed = True
+        except (TransferCancelled, DeviceInterrupted):
+            raise
         except OSError as cause:
+            if isinstance(cause, TimeoutError):
+                error = TimeoutError(tr("TCP 傳輸逾時：本機已接受 {sent}/{total} bytes；不會自動重送。",
+                                        sent=sent, total=len(data)))
+                error.bytes_sent, error.bytes_total = sent, len(data)
+                raise error from cause
+            if isinstance(cause, (ConnectionResetError, BrokenPipeError)):
+                raise DeviceInterrupted(
+                    tr("裝置連線中斷：本機已接受 {sent}/{total} bytes。",
+                       sent=sent, total=len(data)), sent, len(data)) from cause
             message = tr("TCP 傳輸中斷：本機已接受 {sent}/{total} bytes；不會自動重送。原因：{reason}",
                          sent=sent, total=len(data), reason=str(cause))
-            error = TimeoutError(message) if isinstance(cause, TimeoutError) else OSError(message)
+            error = OSError(message)
             error.bytes_sent, error.bytes_total = sent, len(data)
             raise error from cause
+        finally:
+            if not completed:
+                try:
+                    connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER,
+                                          struct.pack("ii", 1, 0))
+                except Exception:
+                    pass
     return sent
 
 
@@ -149,7 +248,7 @@ def usb_devices():
     return list(usb.core.find(find_all=True, idVendor=USB_VENDOR, idProduct=USB_PRODUCT))
 
 
-def send_usb(payload, device, timeout_ms=2000):
+def send_usb(payload, device, timeout_ms=2000, *, cancel_event=None):
     """Use the printer-class interface and last matching bulk IN/OUT pair.
 
     Endpoints are descriptors, not guessed addresses. Writes handle short
@@ -158,6 +257,7 @@ def send_usb(payload, device, timeout_ms=2000):
     import usb.util
     if not payload:
         raise ValueError(tr("沒有可傳送的切割資料"))
+    _raise_if_cancelled(cancel_event, 0, len(payload))
     if (device.idVendor, device.idProduct) != (USB_VENDOR, USB_PRODUCT):
         raise ValueError(tr("所選 USB 裝置不符合支援的切割機識別碼"))
     try:
@@ -190,11 +290,13 @@ def send_usb(payload, device, timeout_ms=2000):
                                             alternate_setting=interface.bAlternateSetting)
         sent = 0
         while sent < len(payload):
+            _raise_if_cancelled(cancel_event, sent, len(payload))
             chunk = payload[sent:sent + 1024]
             count = endpoint.write(chunk, timeout=timeout_ms)
             if not 0 < count <= len(chunk):
                 raise OSError(tr("USB 傳輸未完成；不會自動重送已送出的資料"))
             sent += count
+        _raise_if_cancelled(cancel_event, sent, len(payload))
         return sent
     finally:
         if claimed:
