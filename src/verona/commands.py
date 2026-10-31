@@ -116,9 +116,15 @@ def encode_plt(contours, *, force=None, speed=None, tool=0, passes=1, registrati
     if speed is not None:
         output.append(f"VS{speed};")
     for points in paths:
-        path = f"U{points[0][0]},{points[0][1]} " + "".join(
+        start = f"U{points[0][0]},{points[0][1]} "
+        trace = "".join(
             f"D{feed},{cross} " for feed, cross in points[1:])
-        output.extend([path] * passes)
+        if points[0] == points[-1]:
+            # Closed contours can continue straight into the next pass.
+            output.append(start)
+            output.extend([trace] * passes)
+        else:
+            output.extend([start + trace] * passes)
     # Registered jobs return using the maximum encoded feed coordinate.
     end_feed = max(feed for path in paths for feed, cross in path) if registration_bounds is not None else 0
     output.append(f"U{end_feed},0 U !PG;")

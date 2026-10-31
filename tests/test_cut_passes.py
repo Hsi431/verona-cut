@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 import unittest
 from contextlib import redirect_stdout, redirect_stderr
@@ -39,8 +40,35 @@ class CutPassTests(unittest.TestCase):
             registration_bounds=(10, 20, 80, 95), registration_offset=(-.3, .2))
         self.assertEqual(payload.count(b"TB26,"), 1)
         self.assertEqual(payload.count(b"CT1;"), 1)
-        self.assertEqual(payload.count(b"U2872,28 D152,2628 D2872,28 "), 10)
+        self.assertEqual(payload.count(b"U2872,28 "), 1)
+        self.assertIn(b"U2872,28 " + b"D152,2628 D2872,28 " * 10, payload)
         self.assertTrue(payload.endswith(b"U2872,0 U !PG;!PG;"))
+
+    def test_closed_passes_stay_down_and_open_passes_return_raised_with_custom_settings(self):
+        contours = [[(11, 23), (30, 40), (11, 23)], [(40, 50), (60, 70)]]
+        for bounds in (None, (10, 20, 80, 95)):
+            for passes in (2, 10):
+                for force, speed in ((85, 11), (None, 11), (85, None), (None, None)):
+                    with self.subTest(bounds=bounds, passes=passes, force=force, speed=speed):
+                        payload = commands.encode_plt(contours, force=force, speed=speed,
+                            passes=passes, registration_bounds=bounds)
+                        moves = re.findall(rb"([UD])(-?\d+),(-?\d+) ", payload)
+                        modes = [mode for mode, _, _ in moves]
+                        self.assertEqual(modes, [b"U"] + [b"D"] * (2 * passes)
+                                         + [b"U", b"D"] * passes + [b"U"])
+                        closed = moves[1:1 + 2 * passes]
+                        self.assertEqual(closed, closed[:2] * passes)
+                        self.assertEqual(closed[-1][1:], moves[0][1:])
+                        opened = moves[1 + 2 * passes:-1]
+                        self.assertEqual(opened, opened[:2] * passes)
+                        self.assertEqual(payload.count(b"!FS85;"), int(force is not None))
+                        self.assertEqual(payload.count(b"VS11;"), int(speed is not None))
+                        self.assertEqual(payload.count(b"TB26,"), int(bounds is not None))
+
+    def test_closure_uses_the_actual_quantized_cutter_coordinates(self):
+        payload = commands.encode_plt([[(5, 5), (15, 5), (5.001, 5.001)]], passes=2)
+        self.assertIn(b"U200,200 " + b"D200,600 D200,200 " * 2, payload)
+        self.assertEqual(payload.count(b"U200,200 "), 1)
 
     def test_pass_count_rejects_nonintegers_and_out_of_range_values(self):
         for value in (0, -1, 11, True, False, None, 2., "2", float("nan")):
@@ -167,3 +195,37 @@ class CutPassUiTests(unittest.TestCase):
             self.window.send_to_cutter()
         send.assert_called_once()
         self.assertEqual(send.call_args.args[0].count(b"D200,600 "), 3)
+
+    def test_two_pass_custom_settings_survive_save_and_reach_the_sender(self):
+        self.window.items = [{"name": "square", "cut": True, "contours": [
+            [[10, 10], [20, 10], [20, 20], [10, 20], [10, 10]]]}]
+        self.window.metadata = {"print_cut": {"enabled": True, "paper_width": 210,
+            "paper_height": 297, "bounds": [6, 6, 204, 291]}}
+        self.window.custom_settings.setChecked(True)
+        self.window.passes_spin.setValue(2)
+        self.window.speed_spin.setValue(11)
+        self.window.force_spin.setValue(85)
+        self.window.wifi_host.setText("192.0.2.1")
+        with tempfile.TemporaryDirectory() as folder:
+            for suffix in (".jdesign", ".lds"):
+                path = Path(folder) / ("two-pass" + suffix)
+                self.window._write_document(str(path))
+                self.window.passes_spin.setValue(1)
+                self.window.speed_spin.setValue(5)
+                self.window.force_spin.setValue(10)
+                self.assertTrue(self.window._load_document(str(path)))
+                settings = self.window._cut_settings()
+                self.assertEqual((settings["passes"], settings["speed"], settings["force"]), (2, 11, 85))
+                self.assertTrue(settings["custom"])
+                expected = self.window._encoded_plt()
+                with patch.object(self.window, "_confirm_send", return_value=True), \
+                        patch.object(self.window, "_dispatch", side_effect=lambda task, *_: task()), \
+                        patch("verona.transport.send_tcp", side_effect=lambda payload, *_args, **_kw: len(payload)) as send:
+                    self.window.send_to_cutter()
+                self.assertEqual(send.call_args.args[0], expected)
+                self.assertEqual(expected.count(b"U11240,160 "), 1)
+                self.assertEqual(expected.count(b"D11240,560 D10840,560 D10840,160 D11240,160 "), 2)
+                self.assertEqual(expected.count(b"VS11;"), 1)
+                self.assertEqual(expected.count(b"!FS85;"), 1)
+                self.assertEqual(expected.count(b"TB26,"), 1)
+                self.window.sending = False
