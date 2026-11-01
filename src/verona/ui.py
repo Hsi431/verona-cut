@@ -2188,6 +2188,12 @@ def main(argv: list[str] | None = None) -> int:
     app.setFont(QFont("Noto Sans", 10))
     window = VeronaWindow(host=host, port=options.port)
     session.openRequested.connect(window.open_paths)
+    from .recovery import RecoveryController
+    try:
+        window.recovery = RecoveryController(window)
+        QTimer.singleShot(0, window.recovery.restore_available)
+    except OSError as error:
+        window.status_label.setText(tr("無法啟動自動復原：{reason}", reason=str(error)))
     from .editor_bridge import EditorBridge
     try:
         window.editor_bridge = EditorBridge(window)

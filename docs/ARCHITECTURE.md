@@ -12,6 +12,7 @@ hardware access are separate so a preview never needs a device connection.
 | `lds_export.py`, `native_images.py` | Bounded native CDOC/ZIP output and lossless QOI image encoding. |
 | `ui.py`, `node_editor.py`, `editor_widgets.py` | Desktop controls, editing tools and explicit print/send actions. |
 | `document_state.py` | Per-document contents, settings, selection, saved baseline and undo/redo history, without editor widgets. |
+| `recovery.py`, `workspace_storage.py` | Private atomic crash drafts, per-session leases and explicit startup recovery. |
 | `document_workspace.py` | Tab and file lifecycle, unsaved-change prompts and synchronization between document settings and controls. |
 | `geometry.py`, `design_validation.py`, `file_io.py` | Shared geometry, document validation and atomic saves, independent of the main window. |
 | `canvas.py`, `view_constants.py`, `preview_dialogs.py` | Canvas, rulers, view defaults and bleed/packing/toolpath previews. |

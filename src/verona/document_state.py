@@ -1,6 +1,7 @@
 """Document contents, cut settings and edit history, independent of widgets."""
 
 import copy
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -25,6 +26,7 @@ class DocumentState:
     redo_stack: list[dict[str, Any]] = field(default_factory=list)
     saved_snapshot: dict[str, Any] = field(init=False)
     view: dict[str, Any] = field(default_factory=dict)
+    recovery_id: str = field(default_factory=lambda: uuid.uuid4().hex, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         self.settings = dict(self.settings)

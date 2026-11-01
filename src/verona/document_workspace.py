@@ -144,11 +144,13 @@ class DocumentWorkspace:
             self._documents[0] = DocumentState(settings=self._cut_settings())
             self.native_preview_action.setEnabled(False)
             self.refresh_all()
+            self._checkpoint_recovery()
             return True
         del self._documents[index]
         next_index = min(index, len(self._documents)-1)
         self._active_document = next_index
         self._restore_tab_state(self._documents[next_index])
+        self._checkpoint_recovery()
         return True
 
     def _cut_settings(self) -> dict[str, Any]:
@@ -321,6 +323,7 @@ class DocumentWorkspace:
         write_document(filename, self.document.design(), overwrite=overwrite)
         self.document.mark_saved(filename)
         self._refresh_tab_titles()
+        self._checkpoint_recovery()
         if target.suffix.lower() == ".lds":
             self.status_label.setText(tr("已儲存 {name} · 原廠 LDS 相容性尚未驗證", name=target.name))
 
@@ -385,6 +388,8 @@ class DocumentWorkspace:
             self._closed = True
             self.stop_sending()
             QApplication.instance().removeEventFilter(self)
+            if getattr(self, "recovery", None) is not None:
+                self.recovery.close()
             event.accept()
         finally:
             self._closing = False
@@ -409,3 +414,7 @@ class DocumentWorkspace:
         }
 
         self._refresh_tab_titles()
+
+    def _checkpoint_recovery(self):
+        if getattr(self, "recovery", None) is not None:
+            self.recovery.checkpoint()

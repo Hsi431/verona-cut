@@ -46,6 +46,18 @@ normal editing and cutting work offline.
 - **Local tools:** a dry-run-first CLI, read-only cutter information,
   an optional MCP editor bridge, and experimental local firmware tools.
 
+### Automatic recovery
+
+The desktop workspace saves changed, unsaved tabs every 30 seconds under
+`$XDG_STATE_HOME/verona/recovery` (default `~/.local/state/verona/recovery`).
+Drafts stay on this computer and do not overwrite the original design.
+After an unexpected exit, choose **Restore**, **Later** or **Discard drafts**.
+Restored tabs are marked unsaved; save them normally to keep the recovered work.
+Up to the last 30 seconds of editing may be missing. Undo history is not recovered.
+Saving or discarding a tab removes its draft, and normal exit clears the current
+workspace's drafts. Unreadable drafts are kept; a running workspace's drafts
+are left alone.
+
 ## Current support
 
 Verona is **alpha software**. The supported cutting workspace is **300 × 300 mm**.

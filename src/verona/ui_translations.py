@@ -1,6 +1,15 @@
 """English strings keyed by the Traditional Chinese UI source text."""
 
 ENGLISH = {
+    "無法儲存復原草稿：{reason}": "Cannot save recovery draft: {reason}",
+    "無法啟動自動復原：{reason}": "Cannot start automatic recovery: {reason}",
+    "復原未儲存的設計": "Recover unsaved designs",
+    "找到 {count} 份未儲存的草稿。要復原嗎？": "Found {count} unsaved drafts. Restore them?",
+    "復原設計": "Restore",
+    "捨棄草稿": "Discard drafts",
+    "稍後再說": "Later",
+    "復原草稿": "Recovery drafts",
+    "部分草稿無法讀取，已保留原檔。": "Some drafts could not be read. Their files have been kept.",
     "縮小預覽": "Zoom out",
     "放大預覽": "Zoom in",
     "符合視窗": "Fit view",
