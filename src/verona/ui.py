@@ -497,6 +497,9 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         cut_layout.setContentsMargins(0, 4, 0, 4)
         self.cut_section = CollapsibleSection(tr("切割工具"), cut_content)
         layout.addWidget(self.cut_section)
+        from .material_presets import MaterialPresetWidget
+        self.material_presets = MaterialPresetWidget(self)
+        cut_layout.addWidget(self.material_presets)
         settings = QFormLayout()
         settings.setVerticalSpacing(4)
         self.tool_combo = QComboBox()
@@ -846,6 +849,7 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         self.import_button.setEnabled(not self.sending)
         self.stop_send_button.setVisible(self.sending)
         self.stop_send_button.setEnabled(self.sending and not stopping)
+        self.material_presets.refresh_actions()
 
     def stop_sending(self) -> None:
         if not self.sending or self._send_cancel_event is None:
@@ -1095,6 +1099,7 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
                          "view_section", "cut_section", "mark_section", "connection_section")
         sections = {name: getattr(self, name).isExpanded() for name in section_names}
         image_view = self.image_opacity.value(), self.cutline_view.isChecked()
+        preset_name = self.material_presets.combo.currentData()
         scroll_position = (self.canvas_scroll.horizontalScrollBar().value(),
                            self.canvas_scroll.verticalScrollBar().value())
         zoom = self.canvas.zoom
@@ -1109,6 +1114,7 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         self._build_ui()
         self._build_menu()
         self._restore(snapshot)
+        self.material_presets.reload(preset_name)
         for name, expanded in sections.items():
             getattr(self, name).setExpanded(expanded)
         self.cutline_view.setChecked(image_view[1])

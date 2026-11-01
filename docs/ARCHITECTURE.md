@@ -11,6 +11,7 @@ hardware access are separate so a preview never needs a device connection.
 | `core.py`, `lds.py`, `document_import.py` | Bounded SVG, LDS and printable artwork import. |
 | `lds_export.py`, `native_images.py` | Bounded native CDOC/ZIP output and lossless QOI image encoding. |
 | `ui.py`, `node_editor.py`, `editor_widgets.py` | Desktop controls, editing tools and explicit print/send actions. |
+| `material_presets.py` | Validated named cut settings in the workspace preference store, with explicit undoable application. |
 | `document_state.py` | Per-document contents, settings, selection, saved baseline and undo/redo history, without editor widgets. |
 | `recovery.py`, `workspace_storage.py` | Private atomic crash drafts, per-session leases and explicit startup recovery. |
 | `document_workspace.py` | Tab and file lifecycle, unsaved-change prompts and synchronization between document settings and controls. |

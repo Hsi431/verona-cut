@@ -58,6 +58,17 @@ Saving or discarding a tab removes its draft, and normal exit clears the current
 workspace's drafts. Unreadable drafts are kept; a running workspace's drafts
 are left alone.
 
+### Material/tool presets
+
+Expand **Cutting tool** in the right inspector and use **Save preset…** to name
+the current tool, passes, speed, force and custom-speed/force toggle. Presets
+live in the local `Verona/Workspace` user settings and can be reused across designs.
+Choosing a preset does not change the document until you click **Apply**;
+applying affects only the active tab and supports undo/redo. Connections, IP
+addresses, paper and artwork stay unchanged, and applying never sends a job.
+Replacing or deleting a preset asks for confirmation. No material values are
+preloaded; save settings you have verified with your own test cuts.
+
 ## Current support
 
 Verona is **alpha software**. The supported cutting workspace is **300 × 300 mm**.

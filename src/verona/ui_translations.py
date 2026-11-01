@@ -1,6 +1,21 @@
 """English strings keyed by the Traditional Chinese UI source text."""
 
 ENGLISH = {
+    "材料／刀具預設": "Material/tool presets",
+    "預設名稱需為 1–80 個字元。": "Preset names must contain 1–80 characters.",
+    "材料預設的切割設定無效。": "The material preset has invalid cut settings.",
+    "無法讀取材料預設，已保留原設定。": "Cannot read material presets. The original settings have been kept.",
+    "無法儲存材料預設。": "Cannot save material presets.",
+    "請先選擇材料預設。": "Choose a material preset first.",
+    "儲存預設…": "Save preset…",
+    "選擇材料／刀具預設": "Choose a material/tool preset",
+    "無法讀取材料預設": "Cannot read material presets",
+    "選擇後按「套用」；不會變更連線設定。": "Choose a preset, then Apply. Connection settings are kept.",
+    "儲存材料預設": "Save material preset",
+    "覆寫材料預設": "Replace material preset",
+    "要覆寫「{name}」嗎？": "Replace “{name}”?",
+    "刪除材料預設": "Delete material preset",
+    "要刪除「{name}」嗎？": "Delete “{name}”?",
     "無法儲存復原草稿：{reason}": "Cannot save recovery draft: {reason}",
     "無法啟動自動復原：{reason}": "Cannot start automatic recovery: {reason}",
     "復原未儲存的設計": "Recover unsaved designs",
