@@ -62,7 +62,7 @@ class CanvasRulerTests(unittest.TestCase):
                 labels.append(self.transform().mapRect(bounds))
                 super().drawText(point, text)
 
-        with patch("verona.ui.QPainter", RecordingPainter):
+        with patch("verona.canvas.QPainter", RecordingPainter):
             self.render_ruler(ruler)
         return labels
 
@@ -104,7 +104,7 @@ class CanvasRulerTests(unittest.TestCase):
         ruler = self.window.canvas_scroll.horizontal_ruler
         for zoom in (1.8, 5.49, 64):
             self.window.canvas.set_zoom(zoom)
-            with patch("verona.ui.QPainter", RecordingPainter):
+            with patch("verona.canvas.QPainter", RecordingPainter):
                 self.render_ruler(ruler)
         self.assertGreater(heights[0], 8)
         self.assertEqual(len(set(heights)), 1)
@@ -157,7 +157,7 @@ class CanvasRulerTests(unittest.TestCase):
                         positions.append((a.x(), a.y(), b.x(), b.y()))
                     super().drawLine(*args)
 
-            with patch("verona.ui.QPainter", RecordingPainter):
+            with patch("verona.canvas.QPainter", RecordingPainter):
                 self.render_ruler(ruler)
             return positions
 
@@ -208,7 +208,7 @@ class CanvasRulerTests(unittest.TestCase):
                             positions.append(round(a.y()))
                     super().drawLine(*args)
 
-            with patch("verona.ui.QPainter", RecordingPainter):
+            with patch("verona.canvas.QPainter", RecordingPainter):
                 self.render_ruler(ruler)
             return positions
 

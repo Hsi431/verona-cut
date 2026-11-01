@@ -795,7 +795,7 @@ class DesignUiTests(unittest.TestCase):
             self.assertEqual(os.listdir(folder), ["new.jdesign"])
             # Filesystems without hard links fall back to an exclusive copy.
             copied = Path(folder) / "copied.jdesign"
-            with patch("verona.ui.os.link", side_effect=PermissionError):
+            with patch("verona.file_io.os.link", side_effect=PermissionError):
                 self.window._write_document(str(copied), overwrite=False)
             self.assertEqual(copied.read_text(), path.read_text())
             self.assertEqual(sorted(os.listdir(folder)), ["copied.jdesign", "new.jdesign"])
@@ -805,8 +805,8 @@ class DesignUiTests(unittest.TestCase):
                 raise OSError("disk full")
 
             before = (self.window.current_file, self.window.saved_snapshot)
-            with patch("verona.ui.os.link", side_effect=PermissionError), \
-                    patch("verona.ui.shutil.copyfileobj", side_effect=interrupted_copy):
+            with patch("verona.file_io.os.link", side_effect=PermissionError), \
+                    patch("verona.file_io.shutil.copyfileobj", side_effect=interrupted_copy):
                 with self.assertRaisesRegex(OSError, "disk full"):
                     self.window._write_document(str(Path(folder) / "failed.jdesign"), overwrite=False)
             self.assertEqual(sorted(os.listdir(folder)), ["copied.jdesign", "new.jdesign"])

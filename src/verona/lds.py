@@ -70,7 +70,7 @@ def _logo_bleed(payload, matrix, color):
 
 def restore_native_bleed(items, indices, backup):
     """Recover only bleed settings for exactly matching original artwork."""
-    from .ui import _copy_items
+    from .geometry import copy_items as _copy_items
 
     def identity(item):
         return (item["image_data"], tuple(item["image_transform"]),
@@ -387,8 +387,8 @@ def load_lds(filename, tolerance=0.05):
 
     visit(root)
     if editable is not None:
-        from .ui import VeronaWindow
-        saved_items, settings = VeronaWindow._validate_document(editable)
+        from .design_validation import validate_document
+        saved_items, settings = validate_document(editable)
         return NativeDesign(saved_items, editable.get("metadata", {}), settings)
     if not items:
         raise _invalid("document has no supported geometry")

@@ -10,7 +10,11 @@ hardware access are separate so a preview never needs a device connection.
 | `device_lock.py` | Nonblocking per-user lock shared by GUI, CLI and MCP send operations. |
 | `core.py`, `lds.py`, `document_import.py` | Bounded SVG, LDS and printable artwork import. |
 | `lds_export.py`, `native_images.py` | Bounded native CDOC/ZIP output and lossless QOI image encoding. |
-| `ui.py`, `node_editor.py`, `editor_widgets.py` | Desktop editing, tabs, undo, preview and explicit print/send actions. |
+| `ui.py`, `node_editor.py`, `editor_widgets.py` | Desktop controls, editing tools and explicit print/send actions. |
+| `document_state.py` | Per-document contents, settings, selection, saved baseline and undo/redo history, without editor widgets. |
+| `document_workspace.py` | Tab and file lifecycle, unsaved-change prompts and synchronization between document settings and controls. |
+| `geometry.py`, `design_validation.py`, `file_io.py` | Shared geometry, document validation and atomic saves, independent of the main window. |
+| `canvas.py`, `view_constants.py`, `preview_dialogs.py` | Canvas, rulers, view defaults and bleed/packing/toolpath previews. |
 | `layers.py`, `layer_panel.py` | Shared visibility/output/locking rules and the object layer panel. |
 | `printing.py`, `artwork.py` | Physical-size print/PDF output and registration marks. |
 | `cli.py` | Status query, validated dry-run export and explicit one-shot sending. |
@@ -33,8 +37,8 @@ bleed are rendered at 300 DPI. Shared images use a single QOI definition.
 Image chunks follow the [QOI 1.0 specification](https://qoiformat.org/qoi-specification.pdf).
 Official Leonardo compatibility has not been verified.
 
-Saving builds and validates the archive before writing. The UI writes to a
-temporary sibling file and atomically replaces the destination. Its first
+Saving builds and validates the archive before writing. The UI uses `file_io.py` to write a
+temporary sibling file and atomically replace the destination. Its first
 overwrite of an existing LDS also creates a byte-for-byte `.lds.bak` backup,
 which later saves retain. Automation continues to save `.jdesign`/`.json` only.
 
@@ -44,6 +48,12 @@ enabled cutting. A layer is one document object; groups retain their existing
 selection behavior. Hidden items never reach print or cut output. Locking
 protects editing in both the GUI and the local automation interface.
 
-Settings use Qt's per-user `Verona/Workspace` store. Device locks and editor
+Each open tab owns a `DocumentState`. Cut settings live in that document;
+control signals update them, and tab/history restoration blocks control signals
+until all values are installed. Saving and job construction read the document
+settings without consulting widgets. Zoom, pan and scroll positions stay with
+the tab but are excluded from saved content and dirty checks.
+
+Workspace preferences use Qt's per-user `Verona/Workspace` store. Device locks and editor
 sockets use XDG state/runtime directories. No local settings, private designs
 or device address are needed in the source tree.

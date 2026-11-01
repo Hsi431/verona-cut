@@ -228,7 +228,7 @@ class LdsExportTests(unittest.TestCase):
                 original=path.read_bytes()
                 self.window._load_document(str(path))
                 self.window.items[0]["name"]="Unsaved change"
-                with patch("verona.ui."+operation,side_effect=OSError("test failure")), \
+                with patch("verona.file_io."+operation,side_effect=OSError("test failure")), \
                         patch.object(QMessageBox,"critical") as message:
                     self.assertFalse(self.window.save_design())
                     message.assert_called_once()

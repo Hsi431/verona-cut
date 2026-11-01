@@ -8,6 +8,7 @@ import sys
 
 from . import commands, transport
 from .device_lock import device_lock
+from .design_validation import validate_document
 
 
 def prepare_job(path, *, force=None, speed=None, tool=None, passes=None):
@@ -19,9 +20,8 @@ def prepare_job(path, *, force=None, speed=None, tool=None, passes=None):
     if path.suffix.lower() != ".jdesign":
         raise ValueError("Use a .jdesign or plain path-based .svg file; raw PLT input is not accepted.")
     from .input_safety import read_design
-    from .ui import VeronaWindow
     data = read_design(path)
-    items, settings = VeronaWindow._validate_document(data)
+    items, settings = validate_document(data)
     return commands.encode_document(items, data.get("metadata", {}), settings,
                                     force=force, speed=speed, tool=tool, passes=passes)
 

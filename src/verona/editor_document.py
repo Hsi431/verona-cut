@@ -6,10 +6,10 @@ from PySide6.QtCore import QPointF, QRectF
 from PySide6.QtGui import QFont, QFontInfo, QImageReader, QPainterPath, QTransform
 
 from .editor_actions import build_edit, cutting_frame, finite_number
+from .geometry import copy_items as _copy_items, flatten_path as _flatten, transform_item as _transform_item
 
 
 def build_document_edit(items, metadata, settings, selection, action, parameters):
-    from .ui import _copy_items, _flatten, _transform_item
     from .layers import editable
     if action in ("vector_print", "edit_path", "retrace_image", "pack_objects"):
         if any(not editable(items[i]) for i in selection):

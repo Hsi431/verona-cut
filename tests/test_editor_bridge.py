@@ -365,8 +365,8 @@ class EditorBridgeTests(unittest.TestCase):
         self.assertEqual(self.window._document_state(), original)
         opened = self.request("open_document", expected_revision=state["revision"], path=str(source))
         self.assertEqual(len(opened["tabs"]), 2)
-        self.assertEqual(self.window._documents[0]["items"], original["items"])
-        self.assertEqual(self.window._documents[0]["metadata"], original["metadata"])
+        self.assertEqual(self.window._documents[0].items, original["items"])
+        self.assertEqual(self.window._documents[0].metadata, original["metadata"])
         occupied = Path(self.folder.name) / "keep.jdesign"
         occupied.write_text("keep")
         with self.assertRaises(ValueError):

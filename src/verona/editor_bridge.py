@@ -184,7 +184,7 @@ class EditorBridge(QObject):
         return {"editor_id": self.editor_id, "revision": self.revision(),
                 "file": window.current_file, "dirty": window.is_dirty(),
                 "active_tab": window._active_document,
-                "tabs": [{"index": i, "file": window.current_file if i == window._active_document else tab["file"]}
+                "tabs": [{"index": i, "file": tab.current_file}
                          for i, tab in enumerate(window._documents)],
                 "selection": sorted(window.selected_indices()), "units": "mm",
                 "metadata": {key: value for key, value in window.metadata.items()
@@ -274,7 +274,7 @@ class EditorBridge(QObject):
             raise ValueError("Choose artwork or toolpath view.")
         if view == "toolpath":
             from .commands import encode_document
-            from .ui import PlotPreviewCanvas
+            from .preview_dialogs import PlotPreviewCanvas
             plan = self.plans.get(plan_id) if plan_id is not None else None
             if plan_id is not None and plan is None:
                 raise ValueError("Unknown or expired preview plan.")
@@ -341,7 +341,7 @@ class EditorBridge(QObject):
             if overwrite:
                 os.replace(temporary, destination)
             else:
-                from .ui import publish_new_file
+                from .file_io import publish_new_file
                 publish_new_file(temporary, destination)
         finally:
             temporary.unlink(missing_ok=True)

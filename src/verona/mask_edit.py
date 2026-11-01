@@ -12,6 +12,7 @@ from .i18n import tr
 from .editor_widgets import SafeDoubleSpinBox
 from .raster_import import (ImportImageDialog, TRACE_KEYS, _offset_path, _png_base64, _polygon_area,
                             _rgba_array, decode_embedded_image, raster_options, trace_paths)
+from .geometry import flatten_path as _flatten
 
 
 def validate_trace_options(image, changes):
@@ -133,7 +134,6 @@ def paint_mask(item, image, mask, strokes):
 
 
 def retrace_item(item, changes, mask=None):
-    from .ui import _flatten
     if "image_data" not in item or item.get("registration_guide"):
         raise ValueError("Choose an editable image object.")
     if not isinstance(changes, dict):

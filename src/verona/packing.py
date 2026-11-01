@@ -12,6 +12,7 @@ from .grouping import remap_group_ids, selection_units
 from .i18n import tr
 from .raster_import import _offset_path, _without_holes
 from .layers import cuttable, printable
+from .geometry import copy_items as _copy_items, transform_item as _transform_item
 
 
 def _footprint(items, shape_aware):
@@ -66,7 +67,6 @@ def _intersects(first, second):
 
 
 def pack_items(items, metadata, indices, parameters):
-    from .ui import _copy_items, _transform_item
     allowed = {"gap_mm", "margin_mm", "copies_per_unit", "fill", "allow_rotate", "shape_aware"}
     if not isinstance(parameters, dict) or set(parameters) - allowed:
         raise ValueError("Unknown packing parameters.")

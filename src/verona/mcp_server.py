@@ -9,6 +9,7 @@ import uuid
 
 from . import commands, transport
 from .device_lock import device_lock
+from .design_validation import validate_document
 from .editor_client import editor_request, list_editors
 
 
@@ -51,11 +52,10 @@ class VeronaController:
 
     def prepare_job(self, design_path, force=None, speed=None, tool=None, passes=None):
         # Reuse the editor's full document validation without creating a window.
-        from .ui import VeronaWindow
         path = Path(design_path).expanduser().resolve()
         from .input_safety import read_design
         data = read_design(path)
-        items, settings = VeronaWindow._validate_document(data)
+        items, settings = validate_document(data)
         metadata = data.get("metadata", {})
         payload, job = commands.encode_document_job(items, metadata, settings,
             force=force, speed=speed, tool=tool, passes=passes)

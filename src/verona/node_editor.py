@@ -9,6 +9,8 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
 from .editor_widgets import SafeDoubleSpinBox
 from .i18n import tr
 from .nodes import editable_path, edit_path, insert_node, move_node
+from .raster_import import decode_embedded_image as _qoi_image
+from .view_constants import ACCENT, PAPER
 
 
 class NodeCanvas(QWidget):
@@ -54,7 +56,6 @@ class NodeCanvas(QWidget):
         return cached[1]
 
     def paintEvent(self, _event):
-        from .ui import PAPER, ACCENT, _qoi_image
         item = self.dialog.item
         shown = {id(contour) for contour in item["contours"]} | {id(item.get("image_clip"))}
         cache = self.__dict__.setdefault("_paths", {})

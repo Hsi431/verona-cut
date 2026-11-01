@@ -7,6 +7,7 @@ from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath, QPen, QPolygon
 from .artwork import bounds_list, contour_path, draw_printed_item, item_bounds, validate_bleed
 from .layers import cuttable, editable, printable
 from .grouping import expand_selection, group_items, remap_group_ids, selection_units, ungroup_items
+from .geometry import copy_items as _copy_items, transform_item as _transform_item
 
 
 def cutting_frame(metadata):
@@ -43,7 +44,6 @@ def finite_number(value, name, low, high):
 
 
 def build_edit(items, metadata, indices, action, parameters):
-    from .ui import _copy_items, _transform_item
     allowed = {
         "transform": {"dx_mm", "dy_mm", "scale", "rotation_deg", "mirror_x", "mirror_y"},
         "duplicate": {"dx_mm", "dy_mm"},

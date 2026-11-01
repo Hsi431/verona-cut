@@ -447,5 +447,79 @@ class EditorWorkflowTests(unittest.TestCase):
         prompt.assert_not_called()
 
 
+    def test_cut_settings_are_stored_without_reading_widgets_during_save(self):
+        self.window.add_rectangle()
+        self.window.speed_spin.setValue(11)
+        self.window.force_spin.setValue(85)
+        self.window.passes_spin.setValue(3)
+        self.window.custom_settings.setChecked(True)
+        self.window.wifi_host.setText("192.0.2.11")
+        self.window.wifi_port.setValue(9090)
+        expected = dict(self.window.document.settings)
+        self.assertEqual((expected["speed"], expected["force"], expected["passes"]), (11, 85, 3))
+        self.assertEqual((expected["host"], expected["port"]), ("192.0.2.11", 9090))
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(self.window.speed_spin, "value", side_effect=AssertionError("Widget read")), \
+                patch.object(self.window.wifi_host, "text", side_effect=AssertionError("Widget read")):
+            self.assertEqual(self.window._snapshot()["settings"], expected)
+            self.assertTrue(self.window.is_dirty())
+            output = Path(folder) / "settings.jdesign"
+            self.window._write_document(str(output))
+            self.assertEqual(json.loads(output.read_text())["settings"], expected)
+            self.assertFalse(self.window.is_dirty())
+
+    def test_tab_settings_restore_atomically_and_survive_language_rebuild(self):
+        first = {**self.window._cut_settings(), "custom": True, "speed": 11, "force": 85,
+                 "passes": 3, "tool": 1, "connection": "usb", "host": "192.0.2.11", "port": 9090}
+        self.window._set_cut_settings(first)
+        self.window.new_design()
+        second = {**first, "custom": False, "speed": 4, "force": 12, "passes": 1,
+                  "tool": 0, "connection": "wifi", "host": "192.0.2.22", "port": 8080}
+        self.window._set_cut_settings(second)
+        first_document, second_document = self.window._documents
+        observed = []
+        refresh = self.window._refresh_tab_titles
+
+        def record_refresh():
+            observed.append(self.window._cut_settings())
+            refresh()
+
+        with patch.object(self.window, "_refresh_tab_titles", side_effect=record_refresh):
+            self.window.tab_bar.setCurrentIndex(0)
+        self.assertTrue(observed)
+        self.assertTrue(all(settings == first for settings in observed))
+        self.assertIs(self.window.document, first_document)
+        self.assertTrue(self.window.speed_spin.isEnabled())
+        self.window._change_language("en")
+        self.assertEqual(self.window._cut_settings(), first)
+        self.window.tab_bar.setCurrentIndex(1)
+        self.assertIs(self.window.document, second_document)
+        self.assertEqual(self.window._cut_settings(), second)
+        self.assertFalse(self.window.speed_spin.isEnabled())
+        self.assertEqual(first_document.settings, first)
+
+    def test_window_close_saves_each_document_with_its_own_settings(self):
+        with tempfile.TemporaryDirectory() as folder:
+            first_path, second_path = Path(folder) / "first.jdesign", Path(folder) / "second.jdesign"
+            self.window.add_rectangle()
+            self.window.current_file = str(first_path)
+            self.window.speed_spin.setValue(11)
+            first_items = copy.deepcopy(self.window.items)
+            self.window.new_design()
+            self.window.add_ellipse()
+            self.window.current_file = str(second_path)
+            self.window.speed_spin.setValue(4)
+            second_items = copy.deepcopy(self.window.items)
+            event = QCloseEvent()
+            with patch.object(self.window, "_confirm_unsaved_changes", return_value="save"):
+                self.window.closeEvent(event)
+            self.assertTrue(event.isAccepted())
+            first, second = json.loads(first_path.read_text()), json.loads(second_path.read_text())
+            self.assertEqual(first["items"], json.loads(json.dumps(first_items)))
+            self.assertEqual(second["items"], json.loads(json.dumps(second_items)))
+            self.assertEqual((first["settings"]["speed"], second["settings"]["speed"]), (11, 4))
+            self.assertTrue(all(not document.is_dirty() for document in self.window._documents))
+
+
 if __name__ == "__main__":
     unittest.main()

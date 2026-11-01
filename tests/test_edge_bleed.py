@@ -249,7 +249,6 @@ class EdgeBleedTests(unittest.TestCase):
                 window.close()
 
     def test_canvas_edge_layers_are_bounded_by_bytes_and_released_on_refresh(self):
-        from verona import ui
         window = VeronaWindow()
         items = [self.extend(two_colors()) for _ in range(3)]
         references = []
@@ -261,7 +260,7 @@ class EdgeBleedTests(unittest.TestCase):
             return image, QTransform()
 
         try:
-            with patch.object(ui, "_MAX_CANVAS_EDGE_BYTES", 32, create=True), \
+            with patch("verona.canvas._MAX_CANVAS_EDGE_BYTES", 32), \
                     patch("verona.edge_bleed.edge_bleed_image", side_effect=layer):
                 for item in items:
                     window.canvas.item_edge_bleed(item)

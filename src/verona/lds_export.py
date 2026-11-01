@@ -21,6 +21,7 @@ from .input_safety import MAX_DESIGN_BYTES
 from .layers import cuttable, printable
 from .lds import _HEADER, _SIGNATURE, _MAX_DOCUMENT, _MAX_DEPTH, _MAX_ITEMS, _MAX_OBJECTS, _MAX_POINTS, _MAX_RECORDS
 from .native_images import encode_qoi
+from .design_validation import validate_document
 
 
 EDITABLE_MEMBER = "VERONA.json"
@@ -188,9 +189,8 @@ def _native_document(items, metadata):
 
 def encode_lds(document):
     """Build a complete archive before the caller touches an existing file."""
-    from .ui import VeronaWindow
     from .editor_actions import render_preview
-    items, _settings = VeronaWindow._validate_document(document)
+    items, _settings = validate_document(document)
     metadata = document.get("metadata", {})
     try:
         cdoc = _native_document(items, metadata)

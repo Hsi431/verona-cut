@@ -8,22 +8,11 @@ from PySide6.QtGui import QColor, QPainterPath, QPen, QTransform
 
 from .raster_import import _offset_path, _stroke_region, decode_embedded_image
 from .layers import printable
+from .geometry import contour_path
 
 
 _BLEED_PATHS = OrderedDict()
 _BLEED_PATH_LIMIT = 64
-
-
-def contour_path(contours):
-    path = QPainterPath()
-    for contour in contours:
-        if contour:
-            path.moveTo(*contour[0])
-            for point in contour[1:]:
-                path.lineTo(*point)
-            if len(contour) > 2 and contour[0] == contour[-1]:
-                path.closeSubpath()
-    return path
 
 
 def validate_bleed(value):
