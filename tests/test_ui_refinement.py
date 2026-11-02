@@ -141,7 +141,7 @@ class UiRefinementTests(unittest.TestCase):
         self.window.y_spin.setValue(17)
         self.window.width_spin.setValue(80)
         self.window.height_spin.setValue(35)
-        self.window.selection_edit_buttons[0].click()
+        self.window.height_spin.editingFinished.emit()
         bounds = _item_path(self.window.items[0]).boundingRect()
         self.assertAlmostEqual(bounds.left(), 11)
         self.assertAlmostEqual(bounds.top(), 17)
