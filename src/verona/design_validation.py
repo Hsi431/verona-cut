@@ -10,6 +10,7 @@ from typing import Any
 from .geometry import copy_items as _copy_items
 from .i18n import tr
 from .document_state import default_cut_settings
+from .view_constants import PAGE_HEIGHT_MM, PAGE_WIDTH_MM
 
 
 def _qoi_image(encoded: str):
@@ -166,6 +167,19 @@ def validate_document(data: Any, trusted_items=()) -> tuple[list[dict[str, Any]]
     metadata = data.get("metadata", {})
     if not isinstance(metadata, dict):
         raise ValueError(tr("設計檔中的中繼資料無效。"))
+    if "guides" in metadata:
+        guides = metadata["guides"]
+        if not isinstance(guides, list) or len(guides) > 1000:
+            raise ValueError(tr("設計檔中的參考線設定無效。"))
+        for guide in guides:
+            if (not isinstance(guide, dict) or set(guide) != {"orientation", "position"}
+                    or guide["orientation"] not in ("horizontal", "vertical")):
+                raise ValueError(tr("設計檔中的參考線設定無效。"))
+            position = guide["position"]
+            maximum = PAGE_WIDTH_MM if guide["orientation"] == "vertical" else PAGE_HEIGHT_MM
+            if (isinstance(position, bool) or not isinstance(position, (int, float))
+                    or not math.isfinite(position) or not 0 <= position <= maximum):
+                raise ValueError(tr("設計檔中的參考線設定無效。"))
     if "optimize_paths" in metadata and type(metadata["optimize_paths"]) is not bool:
         raise ValueError(tr("設計檔中的路徑排序設定無效。"))
     if "printer_settings" in metadata:

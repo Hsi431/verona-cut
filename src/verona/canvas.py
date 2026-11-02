@@ -75,6 +75,32 @@ class CanvasRuler(QWidget):
                     painter.drawText(QPointF(0, 0), text)
                 painter.restore()
 
+    def mousePressEvent(self, event: Any) -> None:
+        canvas = self.scroll.widget()
+        if (self.orientation is None or event.button() != Qt.MouseButton.LeftButton
+                or not canvas.interactive):
+            return super().mousePressEvent(event)
+        orientation = ("vertical" if self.orientation == Qt.Orientation.Horizontal
+                       else "horizontal")
+        if canvas.begin_ruler_guide(orientation, event.globalPosition()):
+            event.accept()
+
+    def mouseMoveEvent(self, event: Any) -> None:
+        canvas = self.scroll.widget()
+        if canvas.guide_drag is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            canvas.move_guide_drag(event.globalPosition())
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: Any) -> None:
+        canvas = self.scroll.widget()
+        if canvas.guide_drag is not None and event.button() == Qt.MouseButton.LeftButton:
+            canvas.finish_guide_drag(event.globalPosition())
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
 
 class CanvasScrollArea(QScrollArea):
     """Keep rulers outside the scrolling canvas and align them to its origin."""
@@ -142,6 +168,8 @@ class DesignCanvas(QWidget):
         self.drag_toggle_selection = None
         self.drag_handle = None
         self.drag_bounds = None
+        self.alignment_lines: list[tuple[str, float, float, float]] = []
+        self.guide_drag: dict[str, Any] | None = None
         self.handle_points = {}
         self.pan_start = None
         self.pan_scroll = None
@@ -268,6 +296,179 @@ class DesignCanvas(QWidget):
                 return name
         return None
 
+    def _guides_visible(self) -> bool:
+        return self.owner.settings.value("guides/visible", True, type=bool)
+
+    def _guides_locked(self) -> bool:
+        return self.owner.settings.value("guides/locked", False, type=bool)
+
+    def _smart_guides_enabled(self) -> bool:
+        return self.owner.settings.value("guides/smart", True, type=bool)
+
+    def _global_to_canvas(self, point: QPointF) -> QPointF:
+        return QPointF(self.mapFromGlobal(point.toPoint()))
+
+    def _guide_value(self, orientation: str, global_pos: QPointF) -> float:
+        world = self._world_point(self._global_to_canvas(global_pos))
+        return world.x() if orientation == "vertical" else world.y()
+
+    def begin_ruler_guide(self, orientation: str, global_pos: QPointF) -> bool:
+        if self._guides_locked():
+            return False
+        self.guide_drag = {"orientation": orientation, "index": None,
+                           "position": self._guide_value(orientation, global_pos),
+                           "new": True}
+        self.update()
+        return True
+
+    def move_guide_drag(self, global_pos: QPointF) -> None:
+        if self.guide_drag is None:
+            return
+        self.guide_drag["position"] = self._guide_value(
+            self.guide_drag["orientation"], global_pos)
+        self.update()
+
+    def _over_matching_ruler(self, orientation: str, global_pos: QPointF) -> bool:
+        scroll = self.owner.canvas_scroll
+        ruler = (scroll.horizontal_ruler if orientation == "vertical"
+                 else scroll.vertical_ruler)
+        return ruler.rect().contains(ruler.mapFromGlobal(global_pos.toPoint()))
+
+    def _inside_page(self, global_pos: QPointF) -> bool:
+        point = self._global_to_canvas(global_pos)
+        origin = self.canvas_origin()
+        return QRectF(origin.x(), origin.y(), PAGE_WIDTH_MM * self.zoom,
+                      PAGE_HEIGHT_MM * self.zoom).contains(point)
+
+    def finish_guide_drag(self, global_pos: QPointF | None) -> None:
+        drag, self.guide_drag = self.guide_drag, None
+        self.alignment_lines = []
+        if drag is None or global_pos is None:
+            self.update()
+            return
+        orientation = drag["orientation"]
+        position = self._guide_value(orientation, global_pos)
+        on_ruler = self._over_matching_ruler(orientation, global_pos)
+        on_page = self._inside_page(global_pos)
+        before = self.owner._snapshot()
+        guides = self.owner.metadata.get("guides", [])
+        if drag["new"]:
+            maximum = PAGE_WIDTH_MM if orientation == "vertical" else PAGE_HEIGHT_MM
+            if on_page and 0 <= position <= maximum:
+                self.owner.metadata.setdefault("guides", []).append(
+                    {"orientation": orientation, "position": float(position)})
+        elif on_ruler:
+            guides.pop(drag["index"])
+            if not guides:
+                self.owner.metadata.pop("guides", None)
+        elif on_page:
+            maximum = PAGE_WIDTH_MM if orientation == "vertical" else PAGE_HEIGHT_MM
+            if 0 <= position <= maximum:
+                guides[drag["index"]]["position"] = float(position)
+        if self.owner._snapshot() != before:
+            self.owner.push_undo(before)
+            self.owner.refresh_all()
+        else:
+            self.update()
+
+    def cancel_guide_drag(self) -> None:
+        if self.guide_drag is None:
+            return
+        self.guide_drag = None
+        self.alignment_lines = []
+        self.update()
+
+    def _start_existing_guide_drag(self, point: QPointF) -> bool:
+        if self._guides_locked() or not self._guides_visible():
+            return False
+        world = self._world_point(point)
+        candidates = []
+        for index, guide in enumerate(self.owner.metadata.get("guides", [])):
+            orientation, value = guide["orientation"], guide["position"]
+            coordinate = world.x() if orientation == "vertical" else world.y()
+            within = 0 <= (world.y() if orientation == "vertical" else world.x()) <= (
+                PAGE_HEIGHT_MM if orientation == "vertical" else PAGE_WIDTH_MM)
+            distance = abs(value - coordinate) * self.zoom
+            if within and distance <= 6:
+                candidates.append((distance, index, orientation, value))
+        if not candidates:
+            return False
+        _, index, orientation, value = min(candidates)
+        self.guide_drag = {"orientation": orientation, "index": index,
+                           "position": value, "new": False}
+        return True
+
+    def _snap_targets(self, axis: int, selected: set[int]):
+        horizontal = axis == 0
+        if self._smart_guides_enabled():
+            for index, item in enumerate(self.owner.items):
+                if (index in selected or item.get("registration_guide", False)
+                        or not item.get("visible", True)):
+                    continue
+                bounds = self.item_path(item).boundingRect()
+                values = ((bounds.left(), bounds.center().x(), bounds.right()) if horizontal
+                          else (bounds.top(), bounds.center().y(), bounds.bottom()))
+                start, end = ((bounds.top(), bounds.bottom()) if horizontal
+                              else (bounds.left(), bounds.right()))
+                yield from ((value, start, end) for value in values)
+            paper_values = ((0.0, PAGE_WIDTH_MM / 2, PAGE_WIDTH_MM) if horizontal
+                            else (0.0, PAGE_HEIGHT_MM / 2, PAGE_HEIGHT_MM))
+            extent = PAGE_HEIGHT_MM if horizontal else PAGE_WIDTH_MM
+            yield from ((value, 0.0, extent) for value in paper_values)
+        for guide in self.owner.metadata.get("guides", []):
+            if guide["orientation"] == ("vertical" if horizontal else "horizontal"):
+                extent = PAGE_HEIGHT_MM if horizontal else PAGE_WIDTH_MM
+                yield guide["position"], 0.0, extent
+
+    def _snap_bounds(self, bounds: QRectF, delta: QPointF, selected: set[int],
+                     modifiers: Qt.KeyboardModifier, axes=(True, True)) -> QPointF:
+        if modifiers & Qt.KeyboardModifier.ControlModifier:
+            self.alignment_lines = []
+            return delta
+        threshold = 6 / self.zoom
+        result = [delta.x(), delta.y()]
+        lines = []
+        source_values = ((bounds.left(), bounds.center().x(), bounds.right()),
+                         (bounds.top(), bounds.center().y(), bounds.bottom()))
+        for axis in (0, 1):
+            if not axes[axis]:
+                continue
+            nearest = None
+            for target, start, end in self._snap_targets(axis, selected):
+                for source in source_values[axis]:
+                    difference = target - (source + result[axis])
+                    if abs(difference) <= threshold and (
+                            nearest is None or abs(difference) < abs(nearest[0])):
+                        nearest = difference, target, start, end
+            if nearest is not None:
+                difference, target, start, end = nearest
+                result[axis] += difference
+                lines.append(("vertical" if axis == 0 else "horizontal", target, start, end))
+        self.alignment_lines = lines
+        return QPointF(*result)
+
+    def _snap_handle_point(self, point: QPointF, selected: set[int],
+                           modifiers: Qt.KeyboardModifier) -> QPointF:
+        if modifiers & Qt.KeyboardModifier.ControlModifier:
+            self.alignment_lines = []
+            return point
+        values = [point.x(), point.y()]
+        lines = []
+        threshold = 6 / self.zoom
+        for axis in (0, 1):
+            nearest = None
+            for target, start, end in self._snap_targets(axis, selected):
+                difference = target - values[axis]
+                if abs(difference) <= threshold and (
+                        nearest is None or abs(difference) < abs(nearest[0])):
+                    nearest = difference, target, start, end
+            if nearest is not None:
+                difference, target, start, end = nearest
+                values[axis] += difference
+                lines.append(("vertical" if axis == 0 else "horizontal", target, start, end))
+        self.alignment_lines = lines
+        return QPointF(*values)
+
     def paintEvent(self, _event: Any) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -361,6 +562,52 @@ class DesignCanvas(QWidget):
             pen.setCosmetic(True)
             painter.setPen(pen)
             painter.drawPath(path)
+        light_theme = self.owner.theme_name != "dark"
+        guide_color = QColor("#a62a79" if light_theme else "#f2a1d4")
+        alignment_color = QColor("#c026d3" if light_theme else "#f472d0")
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        if self._guides_visible():
+            guide_pen = QPen(guide_color, 1, Qt.PenStyle.DashLine)
+            guide_pen.setCosmetic(True)
+            painter.setPen(guide_pen)
+            for index, guide in enumerate(self.owner.metadata.get("guides", [])):
+                if (self.guide_drag is not None and not self.guide_drag["new"]
+                        and index == self.guide_drag["index"]):
+                    continue
+                position = guide["position"]
+                if guide["orientation"] == "vertical":
+                    painter.drawLine(QPointF(position, 0), QPointF(position, PAGE_HEIGHT_MM))
+                else:
+                    painter.drawLine(QPointF(0, position), QPointF(PAGE_WIDTH_MM, position))
+        if self.guide_drag is not None:
+            orientation, position = self.guide_drag["orientation"], self.guide_drag["position"]
+            guide_pen = QPen(guide_color, 1, Qt.PenStyle.DashLine)
+            guide_pen.setCosmetic(True)
+            painter.setPen(guide_pen)
+            if orientation == "vertical":
+                painter.drawLine(QPointF(position, 0), QPointF(position, PAGE_HEIGHT_MM))
+                label = f"{position:.1f} mm"
+                label_point = QPointF(min(position + 4 / self.zoom,
+                                          PAGE_WIDTH_MM - 40 / self.zoom), 14 / self.zoom)
+            else:
+                painter.drawLine(QPointF(0, position), QPointF(PAGE_WIDTH_MM, position))
+                label = f"{position:.1f} mm"
+                label_point = QPointF(4 / self.zoom,
+                                      max(14 / self.zoom, position - 4 / self.zoom))
+            font = QFont("Noto Sans")
+            font.setPixelSize(max(1, round(11 / self.zoom)))
+            painter.setFont(font)
+            painter.setPen(guide_color)
+            painter.drawText(label_point, label)
+        if self.alignment_lines:
+            align_pen = QPen(alignment_color, 1, Qt.PenStyle.SolidLine)
+            align_pen.setCosmetic(True)
+            painter.setPen(align_pen)
+            for orientation, coordinate, start, end in self.alignment_lines:
+                if orientation == "vertical":
+                    painter.drawLine(QPointF(coordinate, start), QPointF(coordinate, end))
+                else:
+                    painter.drawLine(QPointF(start, coordinate), QPointF(end, coordinate))
         if selected_indices and self.selection_handles():
             painter.save()
             painter.setClipping(False)
@@ -438,6 +685,9 @@ class DesignCanvas(QWidget):
             return
         point = self._world_point(event.position())
         modifiers = event.modifiers() if hasattr(event, "modifiers") else Qt.KeyboardModifier.NoModifier
+        if self._start_existing_guide_drag(event.position()):
+            self.update()
+            return
         handle = self.handle_at(point)
         if handle and not modifiers & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier):
             self.drag_handle = handle
@@ -477,12 +727,16 @@ class DesignCanvas(QWidget):
             self.drag_index = hit
             self.drag_start = point
             self.drag_before = self.owner._snapshot()
+            self.drag_bounds = self.owner.selection_bounds()
             self._share_drag_paths()
             self.drag_duplicate = bool(modifiers & Qt.KeyboardModifier.AltModifier)
             self.drag_moved = False
         self.update()
 
     def mouseMoveEvent(self, event: Any) -> None:
+        if self.guide_drag is not None:
+            self.move_guide_drag(event.globalPosition())
+            return
         if self.pan_start is not None:
             delta = (event.globalPosition() if hasattr(event, "globalPosition") else event.position()) - self.pan_start
             self.owner.canvas_scroll.horizontalScrollBar().setValue(self.pan_scroll[0] - round(delta.x()))
@@ -534,7 +788,10 @@ class DesignCanvas(QWidget):
                 transform.translate(center.x(), center.y())
                 transform.rotate(angle)
                 transform.translate(-center.x(), -center.y())
+                self.alignment_lines = []
             else:
+                indices = self.drag_before.get("selection", [self.drag_index])
+                point = self._snap_handle_point(point, set(indices), modifiers)
                 opposite = {"nw": bounds.bottomRight(), "ne": bounds.bottomLeft(),
                             "sw": bounds.topRight(), "se": bounds.topLeft()}[self.drag_handle]
                 corner = {"nw": bounds.topLeft(), "ne": bounds.topRight(),
@@ -548,6 +805,15 @@ class DesignCanvas(QWidget):
                 transform.translate(opposite.x(), opposite.y())
                 transform.scale(sx, sy)
                 transform.translate(-opposite.x(), -opposite.y())
+        else:
+            indices = self.drag_before.get("selection", [self.drag_index])
+            if modifiers & Qt.KeyboardModifier.ShiftModifier:
+                axes = ((True, False) if abs(delta.x()) >= abs(delta.y()) else (False, True))
+            else:
+                axes = (True, True)
+            delta = self._snap_bounds(self.drag_bounds, delta,
+                                      set(self.owner.selected_indices()), modifiers, axes)
+            transform = QTransform.fromTranslate(delta.x(), delta.y())
         indices = self.drag_before.get("selection", [self.drag_index])
         if self.drag_duplicate and not self.drag_moved:
             copies = _copy_items([self.drag_before["items"][i] for i in indices])
@@ -569,6 +835,9 @@ class DesignCanvas(QWidget):
         self.update()
 
     def mouseReleaseEvent(self, event: Any) -> None:
+        if self.guide_drag is not None:
+            self.finish_guide_drag(event.globalPosition() if event is not None else None)
+            return
         if self.pan_start is not None:
             self.pan_start = self.pan_scroll = None
             self.setCursor(Qt.CursorShape.OpenHandCursor if self.space_pressed else Qt.CursorShape.ArrowCursor)
@@ -590,6 +859,8 @@ class DesignCanvas(QWidget):
         self.drag_before = None
         self.drag_path = None
         self.drag_handle = self.drag_bounds = None
+        self.alignment_lines = []
+        self.update()
         self.owner._refresh_tab_titles()
 
     def wheelEvent(self, event: Any) -> None:
@@ -664,7 +935,10 @@ class DesignCanvas(QWidget):
             event.accept()
         else:
             self.finish_nudge()
-        if key == Qt.Key.Key_Escape and self.marquee_start is not None:
+        if key == Qt.Key.Key_Escape and self.guide_drag is not None:
+            self.cancel_guide_drag()
+            event.accept()
+        elif key == Qt.Key.Key_Escape and self.marquee_start is not None:
             before = self.marquee_before
             self.marquee_start = self.marquee_end = None
             self.owner.select_many(before)

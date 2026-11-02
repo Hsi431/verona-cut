@@ -1208,6 +1208,29 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         appearance_menu.addSeparator()
         appearance_menu.addAction(self.fit_height_action)
         appearance_menu.addSeparator()
+        self.show_guides_action = QAction(tr("顯示／隱藏參考線"), self)
+        self.show_guides_action.setCheckable(True)
+        self.show_guides_action.setChecked(self.settings.value("guides/visible", True, type=bool))
+        self.show_guides_action.setShortcut("Ctrl+;")
+        self.show_guides_action.triggered.connect(self._set_guides_visible)
+        appearance_menu.addAction(self.show_guides_action)
+        self.lock_guides_action = QAction(tr("鎖定參考線"), self)
+        self.lock_guides_action.setCheckable(True)
+        self.lock_guides_action.setChecked(self.settings.value("guides/locked", False, type=bool))
+        self.lock_guides_action.setShortcut("Alt+Ctrl+;")
+        self.lock_guides_action.triggered.connect(self._set_guides_locked)
+        appearance_menu.addAction(self.lock_guides_action)
+        self.smart_guides_action = QAction(tr("智慧參考線"), self)
+        self.smart_guides_action.setCheckable(True)
+        self.smart_guides_action.setChecked(self.settings.value("guides/smart", True, type=bool))
+        self.smart_guides_action.setShortcut("Ctrl+U")
+        self.smart_guides_action.setToolTip(tr("拖曳時按住 Ctrl 暫停吸附。"))
+        self.smart_guides_action.triggered.connect(self._set_smart_guides)
+        appearance_menu.addAction(self.smart_guides_action)
+        self.clear_guides_action = QAction(tr("清除參考線"), self)
+        self.clear_guides_action.triggered.connect(self._clear_guides)
+        appearance_menu.addAction(self.clear_guides_action)
+        appearance_menu.addSeparator()
         theme_group = QActionGroup(self)
         theme_group.setExclusive(True)
         self.theme_actions = {}
@@ -1292,6 +1315,26 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
             action.setChecked(value == self.theme_name)
         if hasattr(self, "canvas"):
             self.canvas.update()
+
+    def _set_guides_visible(self, visible: bool) -> None:
+        self.settings.setValue("guides/visible", bool(visible))
+        self.canvas.update()
+
+    def _set_guides_locked(self, locked: bool) -> None:
+        self.settings.setValue("guides/locked", bool(locked))
+
+    def _set_smart_guides(self, enabled: bool) -> None:
+        self.settings.setValue("guides/smart", bool(enabled))
+        self.canvas.update()
+
+    def _clear_guides(self) -> None:
+        if not self.metadata.get("guides"):
+            return
+        self.canvas.cancel_guide_drag()
+        before = self._snapshot()
+        self.metadata.pop("guides", None)
+        self.push_undo(before)
+        self.refresh_all()
 
     def _change_theme(self, name: str) -> None:
         self.settings.setValue("theme", name)
