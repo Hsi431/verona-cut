@@ -141,12 +141,13 @@ class AdobeHabitsTests(unittest.TestCase):
         self.window.undo()
         self.assertEqual(self.window.items, original)
 
-    def wheel(self, point, modifiers, delta=120):
+    def wheel(self, point, modifiers, delta=120, horizontal=False):
         canvas = self.window.canvas
         viewport = self.window.canvas_scroll.viewport()
         position = QPointF(canvas.mapFrom(viewport, point))
+        angle = QPoint(delta, 0) if horizontal else QPoint(0, delta)
         event = QWheelEvent(position, QPointF(canvas.mapToGlobal(position.toPoint())),
-                            QPoint(0, 0), QPoint(0, delta), Qt.MouseButton.NoButton,
+                            QPoint(0, 0), angle, Qt.MouseButton.NoButton,
                             modifiers, Qt.ScrollPhase.NoScrollPhase, False)
         QApplication.sendEvent(canvas, event)
         self.app.processEvents()
@@ -180,6 +181,15 @@ class AdobeHabitsTests(unittest.TestCase):
         self.assertTrue(event.isAccepted())
         self.assertEqual(canvas.zoom, zoom)
         self.assertLess(bar.value(), before)
+
+    def test_alt_wheel_zooms_when_x11_reports_it_as_horizontal(self):
+        # Qt's xcb backend turns Alt+wheel into a horizontal angle delta.
+        canvas = self.window.canvas
+        canvas.set_zoom(3.0)
+        self.window._fit_page_height = False
+        self.app.processEvents()
+        self.wheel(QPoint(180, 140), Qt.KeyboardModifier.AltModifier, horizontal=True)
+        self.assertAlmostEqual(canvas.zoom, 3.75)
 
     def test_zoom_actions_expose_adobe_shortcuts_and_100_percent(self):
         self.window._fit_page_height = False

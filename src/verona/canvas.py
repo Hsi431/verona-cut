@@ -611,7 +611,9 @@ class DesignCanvas(QWidget):
         else:
             previous_point, previous_target = self._zoom_anchor
             point = previous_point + (target - previous_target) / self.zoom
-        delta = event.angleDelta().y() or event.pixelDelta().y()
+        # X11 reports Alt+wheel as horizontal, so accept either axis for zoom.
+        angle, pixels = event.angleDelta(), event.pixelDelta()
+        delta = angle.y() or angle.x() or pixels.y() or pixels.x()
         self.owner.change_zoom(1.25 ** (delta / 120))
         self._zoom_anchor = point, target
         self._zoom_timer.start(0)
