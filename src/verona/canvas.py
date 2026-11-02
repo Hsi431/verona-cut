@@ -293,6 +293,16 @@ class DesignCanvas(QWidget):
             painter.setPen(QPen(GRID_MAJOR if major else GRID, 0.28 if major else 0.18))
             painter.drawLine(QPointF(0, y), QPointF(PAGE_WIDTH_MM, y))
 
+        if not self.owner.items:
+            painter.save()
+            painter.setPen(QColor(self.owner.theme_colors["muted"]))
+            font = painter.font()
+            font.setPixelSize(max(1, round(14 / self.zoom)))
+            painter.setFont(font)
+            painter.drawText(QRectF(12, PAGE_HEIGHT_MM / 2 - 10, PAGE_WIDTH_MM - 24, 20),
+                             Qt.AlignmentFlag.AlignCenter, tr("把圖片、SVG 或 PDF 拖進來，或從『匯入』開始"))
+            painter.restore()
+
         registration = self.owner.metadata.get("print_cut", {})
         if registration.get("paper_width", 0) > 0 and registration.get("paper_height", 0) > 0:
             painter.setBrush(Qt.BrushStyle.NoBrush)

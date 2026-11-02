@@ -51,10 +51,18 @@ def stylesheet(c):
         QToolBar#designTools::separator {{ background: {c['separator']}; width: 1px; margin: 4px 6px; }}
         QTreeView {{ background: {c['input']}; border: 1px solid {c['border']}; border-radius: 6px; selection-background-color: {c['selection']}; selection-color: {c['selection_text']}; }}
         QTreeView::item {{ min-height: 26px; }}
+        QCheckBox::indicator, QTreeView::indicator {{ width: 15px; height: 15px; border: 1px solid {c['muted']}; border-radius: 3px; background: {c['input']}; }}
+        QCheckBox::indicator:checked, QTreeView::indicator:checked {{ image: url("{icons / ('check-dark.svg' if c['background'] == '#1b2023' else 'check-light.svg')}"); border-color: {c['accent']}; background: {c['accent']}; }}
+        QCheckBox::indicator:disabled, QTreeView::indicator:disabled {{ border-color: {c['disabled']}; background: {c['background']}; }}
+        QCheckBox::indicator:checked:disabled, QTreeView::indicator:checked:disabled {{ image: url("{icons / ('check-dark.svg' if c['background'] == '#1b2023' else 'check-light.svg')}"); border-color: {c['disabled']}; background: {c['disabled']}; }}
         QHeaderView::section {{ background: {c['surface']}; color: {c['muted']}; border: 0; padding: 4px; }}
         QToolButton, QPushButton {{ background: {c['surface']}; border: 1px solid {c['border']}; border-radius: 7px; padding: 5px 8px; }}
         QToolButton:hover, QPushButton:hover {{ border-color: {c['accent']}; background: {c['hover']}; }}
         QToolButton:checked {{ background: {c['selection']}; color: {c['selection_text']}; border-color: {c['accent']}; }}
+        QToolButton#fitHeight {{ color: {c['accent']}; background: {c['hover']}; border-color: {c['accent']}; }}
+        QToolButton#fitHeight:checked {{ color: {c['accent']}; background: {c['hover']}; border-color: {c['accent']}; }}
+        QToolButton#importButton {{ padding-right: 22px; }}
+        QToolButton#importButton::menu-indicator {{ subcontrol-origin: padding; subcontrol-position: right center; right: 7px; width: 10px; height: 10px; }}
         QToolButton:focus, QPushButton:focus {{ border-color: {c['accent']}; }}
         QToolButton#sectionToggle {{ color: {c['text']}; background: transparent; border: 0; border-radius: 4px; padding: 7px 2px; text-align: left; font-weight: 600; }}
         QToolButton#sectionToggle:hover {{ background: {c['hover']}; }}
@@ -79,4 +87,6 @@ def stylesheet(c):
         QLabel#muted {{ color: {c['muted']}; }}
         QLabel#boundsWarning {{ color: {c['warning_text']}; background: {c['warning_background']}; border: 1px solid {c['warning_border']}; border-radius: 7px; padding: 8px; }}
         QFrame#separator {{ color: {c['separator']}; }}
+        QTabBar::close-button {{ image: url("{icons / ('tab-close-dark.svg' if c['background'] == '#1b2023' else 'tab-close-light.svg')}"); subcontrol-position: right; }}
+        QTabBar::close-button:hover {{ image: url("{icons / ('tab-close-dark-hover.svg' if c['background'] == '#1b2023' else 'tab-close-light-hover.svg')}"); }}
     """

@@ -2,11 +2,12 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView, QFrame, QHeaderView, QHBoxLayout, QPushButton,
-    QTreeWidget, QTreeWidgetItem, QVBoxLayout,
+    QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from .i18n import tr
 from .layers import printable
+from PySide6.QtWidgets import QLabel, QStackedLayout
 
 
 class LayerPanel(QFrame):
@@ -44,10 +45,19 @@ class LayerPanel(QFrame):
         self.tree.setAccessibleName(tr("圖層清單；最上方物件位於最前方"))
         self.tree.itemSelectionChanged.connect(self._selection_changed)
         self.tree.itemChanged.connect(self._changed)
-        layout.addWidget(self.tree)
+        self.empty_hint = QLabel(tr("尚無物件"))
+        self.empty_hint.setObjectName("muted")
+        self.empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        stack = QWidget()
+        stack_layout = QStackedLayout(stack)
+        stack_layout.addWidget(self.tree)
+        stack_layout.addWidget(self.empty_hint)
+        self.stack_layout = stack_layout
+        layout.addWidget(stack)
 
     def refresh(self):
         items = self.owner.items
+        self.stack_layout.setCurrentWidget(self.tree if items else self.empty_hint)
         fingerprint = tuple((id(item), item.get("name"), item.get("visible", True),
                              item.get("locked", False), bool(printable({**item, "visible": True})),
                              item.get("cut", True), item.get("registration_guide", False)) for item in items)

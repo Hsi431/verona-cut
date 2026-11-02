@@ -118,6 +118,7 @@ class PrintDialog(QDialog):
         self.paper_error = QLabel()
         self.paper_error.setWordWrap(True)
         self.paper_error.setTextFormat(Qt.TextFormat.PlainText)
+        self.paper_error.hide()
         self.driver_form.addRow(self.paper_error)
         self.media_combo = QComboBox()
         self.media_combo.currentIndexChanged.connect(self._media_changed)
@@ -287,6 +288,7 @@ class PrintDialog(QDialog):
         self.summary_widget.setVisible(not self.options_available)
         if not self.options_available:
             self.paper_error.clear()
+            self.paper_error.hide()
             self._load_profile_preference("")
             self.preview.updatePreview()
             return
@@ -305,6 +307,7 @@ class PrintDialog(QDialog):
             self.printer.setPageOrientation(QPageLayout.Orientation.Landscape
                 if self.design_width > self.design_height else QPageLayout.Orientation.Portrait)
             self.paper_error.setText("" if accepted else tr("這台印表機無法使用設計紙張尺寸。"))
+        self.paper_error.setVisible(bool(self.paper_error.text()))
         media_key = self._find_option({"mediatype", "media-type", "media", "media-source", "inputslot"})
         quality_key = self._find_option({"cupsprintquality", "quality", "print-quality"})
         self.option_keys["Media"] = media_key

@@ -130,6 +130,8 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         QApplication.instance().installEventFilter(self)
         super().showEvent(event)
         self._schedule_page_fit()
+        if self.focusWidget() is None or self.focusWidget() is self.import_button:
+            self.canvas.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def hideEvent(self, event) -> None:
         self._release_alt_grab()
@@ -271,6 +273,7 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         self._tool(actions, tr("新增設計"), self.new_design)
         self._tool(actions, tr("開啟…"), self.open_design)
         self.import_button = QToolButton()
+        self.import_button.setObjectName("importButton")
         self.import_button.setText(tr("匯入"))
         self.import_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         import_menu = QMenu(self.import_button)
@@ -280,6 +283,8 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         self.import_button.setMenu(import_menu)
         actions.addWidget(self.import_button)
         self.print_button = self._tool(actions, tr("列印…"), self.print_design)
+        toolbar_layout = actions.layout()
+        self._design_toolbar_layout_state = (toolbar_layout.spacing(), toolbar_layout.contentsMargins())
         self.undo_action = QAction(tr("復原"), self)
         self.undo_action.setShortcut("Ctrl+Z")
         self.undo_action.triggered.connect(self.undo)
@@ -303,6 +308,7 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         self.fit_height_action.setShortcut("Ctrl+0")
         self.fit_height_action.triggered.connect(self.fit_page_height)
         self.view_toolbar.addAction(self.fit_height_action)
+        self.view_toolbar.widgetForAction(self.fit_height_action).setObjectName("fitHeight")
         top_row = QHBoxLayout()
         top_row.addWidget(actions)
         top_row.addStretch(1)
@@ -379,6 +385,20 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         self._update_send_controls()
         outer.addLayout(footer)
         self.setCentralWidget(root)
+        self._restore_section_states()
+
+    def _section_names(self) -> tuple[str, ...]:
+        return ("layer_section", "path_section", "transform_section", "alignment_section",
+                "post_edit_section", "view_section", "cut_section", "mark_section", "connection_section")
+
+    def _restore_section_states(self) -> None:
+        for name in self._section_names():
+            section = getattr(self, name)
+            key = f"ui/sections/{name}"
+            expanded = self.settings.value(key, section.isExpanded(), type=bool)
+            section.setExpanded(expanded)
+            section.expandedChanged.connect(
+                lambda value, setting_key=key: self.settings.setValue(setting_key, value))
 
     def _tool(self, toolbar: QToolBar, label: str, callback: Any) -> QToolButton:
         action = QAction(label, toolbar)
@@ -395,7 +415,7 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         path_content = QWidget()
         path_layout = QVBoxLayout(path_content)
         path_layout.setContentsMargins(0, 4, 0, 4)
-        self.path_section = CollapsibleSection(tr("路徑設定"), path_content)
+        self.path_section = CollapsibleSection(tr("物件"), path_content)
         self.path_section.setToolTip(tr("Ctrl／Shift 點選可多選；Ctrl／Alt 滾輪以游標為中心縮放；"
                                         "Shift 滾輪水平捲動。名稱、X、Y、寬度與高度按 Enter "
                                         "或移開焦點即可套用。"))
@@ -1220,6 +1240,11 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         if QApplication.instance().palette() != palette:
             QApplication.instance().setPalette(palette)
         self.setStyleSheet(theme_stylesheet(self.theme_colors))
+        if hasattr(self, "design_toolbar"):
+            layout = self.design_toolbar.layout()
+            spacing, margins = self._design_toolbar_layout_state
+            layout.setSpacing(spacing)
+            layout.setContentsMargins(margins)
         for value, action in getattr(self, "theme_actions", {}).items():
             action.setChecked(value == self.theme_name)
         if hasattr(self, "canvas"):
@@ -1237,8 +1262,7 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         self._release_alt_grab()
         snapshot = self._snapshot()
         undo, redo = self.undo_stack, self.redo_stack
-        section_names = ("layer_section", "path_section", "transform_section", "alignment_section", "post_edit_section",
-                         "view_section", "cut_section", "mark_section", "connection_section")
+        section_names = self._section_names()
         sections = {name: getattr(self, name).isExpanded() for name in section_names}
         image_view = self.image_opacity.value(), self.cutline_view.isChecked()
         preset_name = self.material_presets.combo.currentData()
@@ -1752,7 +1776,8 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
             self.y_spin.setValue(0)
         self.status_label.setText(
             tr("已選取 {selected} 個物件 · 共 {count} 個物件", selected=count, count=len(self.items))
-            if count > 1 else tr("{count} 個路徑 · 工作區 300 × 300 mm", count=len(self.items)))
+            if count > 1 else tr("1 個路徑 · 工作區 300 × 300 mm") if len(self.items) == 1
+            else tr("{count} 個路徑 · 工作區 300 × 300 mm", count=len(self.items)))
         self._refresh_bounds_warning()
 
     def _print_cut_violations(self) -> dict[int, str]:
