@@ -50,6 +50,23 @@ def _display_name(name: str) -> str:
     return tr(name) if name in {"矩形", "圓形", "文字輪廓", "路徑"} else name
 
 
+def _boolean_ui_message(message: str) -> str:
+    keys = {
+        "Choose a nonempty list of current object indices.": "請選取至少兩個未鎖定的向量物件。",
+        "Registration guides cannot be edited through these tools.": "定位標記不能參與路徑運算。",
+        "Unlock the selected layers before editing them.": "請先解鎖所選圖層再編輯。",
+        "Images cannot be used in path operations.": "圖片物件不能參與路徑運算。",
+        "Choose vector objects with closed contours for path operations.": "請選取有封閉輪廓的向量物件。",
+        "Choose at least two vector objects for path operations.": "請選取至少兩個未鎖定的向量物件。",
+        "Path operations need closed contours with at least three points.": "路徑運算需要至少三點的封閉輪廓。",
+        "Path operations require finite millimetre coordinates.": "路徑運算只接受有限的毫米座標。",
+        "mode must be weld, subtract, intersect or exclude.": "路徑運算模式無效。",
+        "A selected object has no filled area to operate on.": "所選路徑沒有可運算的面積。",
+        "The selected paths produce no filled area.": "選取路徑運算後沒有填色區域。",
+    }
+    return tr(keys.get(message, message))
+
+
 _PAPER_SIZES_MM = {
     "a4": (210., 297.), "a5": (148., 210.), "a6": (105., 148.),
     "b5": (176., 250.), "letter": (215.9, 279.4),
@@ -470,6 +487,22 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         transform_layout.setContentsMargins(0, 4, 0, 4)
         self.transform_section = CollapsibleSection(tr("變形與群組"), transform_content)
         layout.addWidget(self.transform_section)
+        boolean_heading = QLabel(tr("路徑運算"), objectName="muted")
+        transform_layout.addWidget(boolean_heading)
+        boolean_grid = QGridLayout()
+        boolean_grid.setSpacing(6)
+        self.boolean_buttons = {}
+        for index, (mode, label) in enumerate((
+                ("weld", "焊接"), ("subtract", "減去上層"),
+                ("intersect", "交集"), ("exclude", "排除重疊"))):
+            button = QPushButton(tr(label))
+            button.setMinimumHeight(30)
+            button.clicked.connect(lambda _checked=False, value=mode: self.boolean_selected(value))
+            boolean_grid.addWidget(button, index // 2, index % 2)
+            self.boolean_buttons[mode] = button
+        boolean_grid.setColumnStretch(0, 1)
+        boolean_grid.setColumnStretch(1, 1)
+        transform_layout.addLayout(boolean_grid)
         transforms = QGridLayout()
         transforms.setSpacing(6)
         for index, (label, callback) in enumerate((
@@ -1091,6 +1124,16 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         self.deselect_action.triggered.connect(lambda: self.select_many([]))
         edit_menu.addAction(self.deselect_action)
         edit_menu.addSeparator()
+        boolean_menu = edit_menu.addMenu(tr("路徑運算"))
+        self.boolean_actions = {}
+        for mode, label in (("weld", "焊接"), ("subtract", "減去上層"),
+                            ("intersect", "交集"), ("exclude", "排除重疊")):
+            action = QAction(tr(label), self)
+            if mode == "weld":
+                action.setShortcut("Ctrl+Shift+U")
+            action.triggered.connect(lambda _checked=False, value=mode: self.boolean_selected(value))
+            boolean_menu.addAction(action)
+            self.boolean_actions[mode] = action
         order_menu = edit_menu.addMenu(tr("排列順序"))
         self.bring_forward_action = QAction(tr("上移一層"), self)
         self.bring_forward_action.setShortcut("Ctrl+]")
@@ -1426,6 +1469,25 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
             self.push_undo(before)
             self.refresh_all()
 
+    def boolean_selected(self, mode: str) -> None:
+        if self._selection_blocked():
+            return
+        from .editor_actions import build_edit
+        before = self._snapshot()
+        try:
+            items, selection, details = build_edit(
+                self.items, self.metadata, sorted(self.selected_indices()),
+                "boolean", {"mode": mode})
+        except ValueError as error:
+            self.status_label.setText(_boolean_ui_message(str(error)))
+            return
+        self.items = items
+        self.select_many(selection)
+        self.push_undo(before)
+        self.refresh_all()
+        self.status_label.setText(tr("路徑運算完成 · {count} 條輪廓 · 精度 {precision} mm",
+                                     count=details["result_contours"], precision=details["precision_mm"]))
+
     def ungroup_selected(self) -> None:
         if self._selection_blocked():
             return
@@ -1699,6 +1761,20 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         unit_count = 0 if blocked else len(self.selection_units())
         for mode, button in self.alignment_buttons.items():
             button.setEnabled(unit_count >= (3 if mode.startswith("distribute_") else 2))
+        if hasattr(self, "boolean_actions"):
+            from .editor_actions import boolean_indices
+            try:
+                boolean_indices(self.items, sorted(self.selected_indices()))
+                reason = "將路徑運算套用至所選封閉向量物件。"
+                available = True
+            except ValueError as error:
+                reason = _boolean_ui_message(str(error))
+                available = False
+            for control in (*self.boolean_actions.values(), *self.boolean_buttons.values()):
+                control.setEnabled(available)
+                control.setToolTip(tr(reason))
+                if hasattr(control, "setStatusTip"):
+                    control.setStatusTip(tr(reason))
         self.group_button.setEnabled(unit_count >= 2)
         has_group = not blocked and any(self.items[i].get("group_path") for i in self.selected_indices())
         self.ungroup_button.setEnabled(has_group)

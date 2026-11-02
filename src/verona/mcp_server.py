@@ -207,7 +207,7 @@ def create_server(controller):
 
     @server.tool(annotations=preview_annotation)
     def verona_preview_edit(editor_id: str, expected_revision: str,
-                            action: Literal["transform", "duplicate", "delete", "set_cut", "group", "ungroup", "align"],
+                            action: Literal["transform", "duplicate", "delete", "set_cut", "group", "ungroup", "align", "boolean"],
                             object_indices: list[StrictInt], parameters: dict[str, Any]) -> dict[str, Any]:
         """Preview an undoable edit without changing the user's document.
 
@@ -215,7 +215,11 @@ def create_server(controller):
         duplicate: dx_mm/dy_mm. set_cut: enabled boolean. align: mode is left,
         hcenter, right, top, vcenter, bottom, distribute_h or distribute_v.
         group/ungroup/delete: {}. Alignment treats outer groups as units.
-        Groups expand together; registration guides cannot be edited.
+        boolean: mode is weld, subtract, intersect or exclude. Weld combines all
+        selected areas; subtract keeps the lowest vector object minus the rest;
+        intersect keeps their common area; exclude keeps odd-overlap regions.
+        Groups expand together, using their vector members for boolean operations.
+        Registration guides cannot be edited.
         """
         return invoke(editor_request, editor_id, "preview",
                       {"expected_revision": expected_revision, "action": action,

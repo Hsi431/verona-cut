@@ -209,9 +209,22 @@ verona_preview_edit supports:
 | group | {} |
 | ungroup | {} |
 | align | mode: left/hcenter/right/top/vcenter/bottom/distribute_h/distribute_v |
+| boolean | mode: weld/subtract/intersect/exclude |
 
 Alignment treats each outer group as one unit and preserves its internal
 positions; distribution requires at least three independent units.
+
+Boolean operations require at least two unlocked closed-vector objects. Weld
+unites their filled areas; subtract keeps the lowest selected vector minus all
+others; intersect keeps only the area shared by every operand; exclude keeps
+regions covered by an odd number of operands. Groups expand, and only their
+vector members take part. A selected image outside a group is rejected. The
+result replaces its operands at the lowest vector's stack position and keeps
+that object's name, print/cut purpose and cut settings. It is one undo step.
+Preview with `verona_preview_edit(action="boolean", object_indices=[...],
+parameters={"mode": "weld"})`; inspect the plan image, then apply its `plan_id`
+with `verona_apply_edit`. Curves are evaluated at a 0.01 mm working precision;
+existing contours retain their source sampling resolution.
 
 ### Create artwork and configure the document
 

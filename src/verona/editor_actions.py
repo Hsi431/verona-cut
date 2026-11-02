@@ -36,6 +36,31 @@ def editable_indices(items, indices):
     return indices
 
 
+def boolean_indices(items, indices):
+    """Resolve the selected vector operands, expanding and filtering groups."""
+    selected = editable_indices(items, indices)
+    groups = {item_path[0] for index in selected
+              if isinstance((item_path := items[index].get("group_path")), list)
+              and item_path}
+    vectors = []
+    for index in selected:
+        item = items[index]
+        path = item.get("group_path")
+        grouped = isinstance(path, list) and bool(path) and path[0] in groups
+        if "image_data" in item:
+            if grouped:
+                continue
+            raise ValueError("Images cannot be used in path operations.")
+        if not item.get("contours"):
+            if grouped:
+                continue
+            raise ValueError("Choose vector objects with closed contours for path operations.")
+        vectors.append(index)
+    if len(vectors) < 2:
+        raise ValueError("Choose at least two vector objects for path operations.")
+    return vectors
+
+
 def finite_number(value, name, low, high):
     if (isinstance(value, bool) or not isinstance(value, (float, int))
             or not math.isfinite(value) or not low <= value <= high):
@@ -50,12 +75,14 @@ def build_edit(items, metadata, indices, action, parameters):
         "delete": set(), "set_cut": {"enabled"}, "group": set(), "ungroup": set(),
         "align": {"mode"},
         "link_cut": {"contour_indices"},
+        "boolean": {"mode"},
         "fill_area": {"gap_mm", "margin_mm", "max_copies", "allow_rotate"},
         "bleed": {"width_mm", "color", "inner_mm", "mode"},
     }
     if action not in allowed or not isinstance(parameters, dict) or set(parameters) - allowed[action]:
         raise ValueError("Unknown edit action or parameters.")
-    selected = editable_indices(items, indices)
+    selected = (boolean_indices(items, indices) if action == "boolean"
+                else editable_indices(items, indices))
     if action == "bleed":
         selected = sorted(set(indices))
     if action == "link_cut":
@@ -97,7 +124,18 @@ def build_edit(items, metadata, indices, action, parameters):
             best[2]["layout_method"] = "rectangular grid, choosing whole-pattern 0/90 degrees; not optimal nesting"
             return best
 
-    if action in ("transform", "duplicate"):
+    if action == "boolean":
+        from .path_ops import boolean_contours
+        base_index = selected[0]
+        contours = boolean_contours([items[index] for index in selected], parameters.get("mode"))
+        result[base_index]["contours"] = contours
+        result[base_index].pop("node_paths", None)
+        result = [item for index, item in enumerate(result)
+                  if index == base_index or index not in selected]
+        details.update(mode=parameters["mode"], operands=len(selected),
+                       result_contours=len(contours), precision_mm=.01)
+        selected = [base_index]
+    elif action in ("transform", "duplicate"):
         dx = finite_number(parameters.get("dx_mm", 10 if action == "duplicate" else 0), "dx_mm", -300, 300)
         dy = finite_number(parameters.get("dy_mm", 10 if action == "duplicate" else 0), "dy_mm", -300, 300)
         transform = QTransform.fromTranslate(dx, dy)
