@@ -619,6 +619,7 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
             custom_paper_layout.addWidget(spin)
             spin.valueChanged.connect(self._custom_paper_changed)
         self.custom_paper_fields = custom_paper
+        self.paper_form = paper_form
         paper_form.addRow(tr("自訂尺寸"), custom_paper)
         mark_layout.addLayout(paper_form)
         self.paper_warning = QLabel()
@@ -1823,7 +1824,7 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
             spin.setValue(value)
             spin.blockSignals(False)
         self.custom_paper_fields.setEnabled(preset == "custom")
-        self.custom_paper_fields.setVisible(preset == "custom")
+        self.paper_form.setRowVisible(self.custom_paper_fields, preset == "custom")
 
         self.registration_checkbox.blockSignals(True)
         self.registration_checkbox.setEnabled(bool(registration))
@@ -1871,7 +1872,7 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         key = self.paper_size_combo.currentData()
         custom = key == "custom"
         self.custom_paper_fields.setEnabled(custom)
-        self.custom_paper_fields.setVisible(custom)
+        self.paper_form.setRowVisible(self.custom_paper_fields, custom)
         if custom or not key:
             return
         width, height = _PAPER_SIZES_MM[key]

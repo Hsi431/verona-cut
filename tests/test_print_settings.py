@@ -91,7 +91,7 @@ class PrintSettingsTests(unittest.TestCase):
         self.assertNotIn("Print preview", texts)
         self.assertNotIn("Check the paper and artwork before printing. Settings are saved with the design.", texts)
         settings = next(button for button in dialog.findChildren(QPushButton)
-                        if button.text() in ("印表機與紙材設定…", "Printer and media settings…"))
+                        if button.text() in ("更多印表機設定…", "More printer settings…"))
         self.assertIn(settings.toolTip(), ("設定會隨目前設計儲存。",
                                           "Settings are saved with the current design."))
 

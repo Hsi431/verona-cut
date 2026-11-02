@@ -45,12 +45,15 @@ class PrintPaperIccTests(unittest.TestCase):
         self.assertEqual(options.get("MediaType", {}).get("choices"),
                          ["PLAIN_NORMAL", "PMMATT_HIGH", "PMPHOTO_HIGH", "PSGLOS_HIGH"])
         self.assertEqual(display_choice("PLAIN_NORMAL"), f"{tr('普通紙')} · {tr('標準')}")
-        self.assertEqual(display_choice("PMMATT_HIGH"), f"{tr('霧面相紙')} · {tr('高品質')}")
+        self.assertEqual(display_choice("PMMATT_HIGH"), f"{tr('雪面銅版紙')} · {tr('高品質')}")
         self.assertEqual(display_choice("DRIVER_UNKNOWN"), "DRIVER_UNKNOWN")
         self.assertEqual(page_size_choice(options, 210, 297), ("PageSize", "A4"))
         self.assertEqual(page_size_choice(options, 101.6, 152.4), ("PageSize", "4X6FULL"))
         self.assertEqual(page_size_choice(parse_lpoptions("PageSize/Size: A4 Custom\n"), 123, 234),
-                         ("PageSize", "Custom"))
+                         ("PageSize", "Custom.123x234mm"))
+        self.assertEqual(page_size_choice(parse_lpoptions(
+            "PageSize/Media Size: *A4 Custom.WIDTHxHEIGHT\n"), 234, 123),
+            ("PageSize", "Custom.123x234mm"))
 
     def test_missing_cups_reader_returns_fallback_without_crashing(self):
         self.assertIsNotNone(importlib.util.find_spec("verona.printer_options"))

@@ -188,9 +188,6 @@ class PrintDialog(QDialog):
         self.icc_form.addRow(tr("演算意圖"), self.intent_combo)
         details.addLayout(self.icc_form)
 
-        legacy_settings_label = QPushButton(tr("印表機與紙材設定…"), panel)
-        legacy_settings_label.setToolTip(tr("設定會隨目前設計儲存。"))
-        legacy_settings_label.hide()
         settings = QPushButton(tr("更多印表機設定…"))
         settings.setAccessibleName(tr("更多印表機設定…"))
         settings.setToolTip(tr("設定會隨目前設計儲存。"))
@@ -220,6 +217,7 @@ class PrintDialog(QDialog):
             footer.addWidget(button)
         footer.addStretch()
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText(tr("取消"))
         self.print_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
         self.print_button.setText(tr("列印"))
         self.print_button.setObjectName("primary")
@@ -333,7 +331,7 @@ class PrintDialog(QDialog):
             self.color_combo.blockSignals(False)
 
         self._clear_advanced()
-        for key in ("Brightness", "Contrast", "Saturation"):
+        for key, label in (("Brightness", "亮度"), ("Contrast", "對比"), ("Saturation", "飽和度")):
             actual = self._find_option({key.casefold()})
             if not actual:
                 continue
@@ -341,7 +339,7 @@ class PrintDialog(QDialog):
             combo.currentIndexChanged.connect(lambda _index, option=actual, control=combo:
                                                self._set_option(option, control.currentData()))
             self._configure_combo(combo, actual)
-            self.advanced_form.addRow(tr(key), combo)
+            self.advanced_form.addRow(tr(label), combo)
             self.advanced_combos[actual] = combo
         self._load_profile_preference(self._current_media_value())
         self._refresh_summary()

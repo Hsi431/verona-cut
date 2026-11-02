@@ -7,10 +7,17 @@ from .i18n import tr
 
 
 _MEDIA_NAMES = {
+    # Names follow the zh_TW strings in Epson's escpr2 PPD and Taiwan paper catalogue.
     "PLAIN": "普通紙",
-    "PMMATT": "霧面相紙",
-    "PMPHOTO": "光面相紙",
-    "PSGLOS": "半光澤相紙",
+    "LETTERHEAD": "信頭紙",
+    "SFINE": "噴墨專用紙",
+    "PMMATT": "雪面銅版紙",
+    "PLATINA": "頂級白金相紙",
+    "PMPHOTO": "頂級光面相紙",
+    "PSGLOS": "頂級半光面相紙",
+    "LCPP": "超值光澤相紙",
+    "MINIPHOTO": "相片貼紙",
+    "ENV": "信封",
     "HIGH": "高品質",
     "NORMAL": "標準",
 }
@@ -104,5 +111,6 @@ def page_size_choice(options, width_mm, height_mm):
     custom = next((choice for choice in page_option["choices"]
                    if choice.casefold() == "custom" or choice.casefold().startswith("custom.")), None)
     if custom is not None:
-        return page_key, custom
+        # CUPS lists the placeholder "Custom.WIDTHxHEIGHT"; jobs need real dimensions.
+        return page_key, f"Custom.{width:g}x{height:g}mm"
     return None
