@@ -151,8 +151,40 @@ def validate_printer(printer, items, metadata, *, calibration=False):
         raise ValueError(tr("定位標記超出這台印表機的可列印範圍，請先依印表機邊界調整定位範圍。"))
 
 
+def render_print_image(items, metadata, *, calibration=False, color_profile_path=None,
+                       rendering_intent="perceptual", dpi=300):
+    """Render the exact raster used by a confirmed MCP print job."""
+    if type(dpi) is not int or not 72 <= dpi <= 600:
+        raise ValueError(tr("列印解析度必須介於 72 與 600 DPI。"))
+    size = print_page_size(items, metadata, calibration=calibration)
+    width = round(size.width() * dpi / 25.4)
+    height = round(size.height() * dpi / 25.4)
+    image = QImage(width, height, QImage.Format.Format_ARGB32_Premultiplied)
+    if image.isNull():
+        raise OSError(tr("無法建立列印預覽影像。"))
+    dots_per_meter = round(dpi / 0.0254)
+    image.setDotsPerMeterX(dots_per_meter)
+    image.setDotsPerMeterY(dots_per_meter)
+    image.fill(Qt.GlobalColor.white)
+    painter = QPainter(image)
+    if not painter.isActive():
+        raise OSError(tr("無法建立列印預覽影像。"))
+    try:
+        _draw_print_page(painter, items, metadata, calibration=calibration,
+                         color_profile_path=color_profile_path,
+                         rendering_intent=rendering_intent)
+    finally:
+        painter.end()
+    return image
+
+
+def write_print_preview_png(filename, image):
+    if not isinstance(image, QImage) or image.isNull() or not image.save(str(filename), "PNG"):
+        raise OSError(tr("無法儲存列印預覽 PNG。"))
+
+
 def print_document(printer, items, metadata, *, calibration=False,
-                   color_profile_path=None, rendering_intent="perceptual"):
+                   color_profile_path=None, rendering_intent="perceptual", rendered_image=None):
     """Print one sheet at actual size using a printer approved in the print dialog."""
     from PySide6.QtPrintSupport import QPrinter
     validate_printer(printer, items, metadata, calibration=calibration)
@@ -162,8 +194,18 @@ def print_document(printer, items, metadata, *, calibration=False,
     if not painter.isActive():
         raise OSError(tr("無法開始列印，請檢查印表機與列印佇列。"))
     try:
-        _draw_print_page(painter, items, metadata, calibration=calibration,
-                         color_profile_path=color_profile_path, rendering_intent=rendering_intent)
+        if rendered_image is None:
+            _draw_print_page(painter, items, metadata, calibration=calibration,
+                             color_profile_path=color_profile_path, rendering_intent=rendering_intent)
+        else:
+            size = print_page_size(items, metadata, calibration=calibration)
+            dpi = round(rendered_image.dotsPerMeterX() * 0.0254) if isinstance(rendered_image, QImage) else 0
+            if (not isinstance(rendered_image, QImage) or rendered_image.isNull()
+                    or printer.resolution() != dpi
+                    or rendered_image.width() != round(size.width() * dpi / 25.4)
+                    or rendered_image.height() != round(size.height() * dpi / 25.4)):
+                raise ValueError(tr("列印預覽與印表機紙張或解析度不一致。"))
+            painter.drawImage(QRectF(0, 0, rendered_image.width(), rendered_image.height()), rendered_image)
     except Exception:
         printer.abort()
         raise

@@ -67,16 +67,97 @@ def apply_printer_settings(printer, settings):
     printer.setCopyCount(settings.get("copies", 1))
     printer.setCollateCopies(settings.get("collate", False))
     if settings.get("cups_options"):
-        printer.printEngine().setProperty(_CUPS_OPTIONS, settings["cups_options"])
+        apply_job_cups_options(printer, settings["cups_options"], replace=True)
+
+
+def apply_job_cups_options(printer, options, *, replace=False):
+    """Apply driver options to this QPrinter job without changing queue defaults."""
+    if (not isinstance(options, list) or len(options) > 128 or len(options) % 2
+            or any(not isinstance(value, str) or len(value) > 1024 or "\0" in value for value in options)
+            or any(key not in _MEDIA_OPTIONS | {"PageSize", "page-size", "media-size"}
+                   for key in options[::2])):
+        raise ValueError(tr("設計檔中的列印設定無效。"))
+    current = [] if replace else list(printer.printEngine().property(_CUPS_OPTIONS) or [])
+    values = dict(zip(current[::2], current[1::2]))
+    values.update(zip(options[::2], options[1::2]))
+    flattened = [part for key, value in values.items() for part in (key, value)]
+    printer.printEngine().setProperty(_CUPS_OPTIONS, flattened)
 
 
 def _set_cups_option(printer, key, value):
     """Change only the active QPrinter job's CUPS options."""
-    options = list(printer.printEngine().property(_CUPS_OPTIONS) or [])
-    values = dict(zip(options[::2], options[1::2]))
-    values[key] = value
-    flattened = [part for name, selected in values.items() for part in (name, selected)]
-    printer.printEngine().setProperty(_CUPS_OPTIONS, flattened)
+    apply_job_cups_options(printer, [key, str(value)])
+
+
+def apply_print_job_options(printer, options, available_options, paper_width_mm, paper_height_mm):
+    """Apply validated, explicit MCP settings to one QPrinter job."""
+    if not isinstance(options, dict):
+        raise ValueError(tr("列印選項必須是物件。"))
+    allowed = {"media", "quality", "color_mode", "copies", "resolution",
+               "brightness", "contrast", "saturation"}
+    if set(options) - allowed:
+        raise ValueError(tr("列印選項包含不支援的欄位。"))
+    if (isinstance(paper_width_mm, bool) or not isinstance(paper_width_mm, (int, float))
+            or isinstance(paper_height_mm, bool) or not isinstance(paper_height_mm, (int, float))):
+        raise ValueError(tr("列印紙張尺寸無效。"))
+
+    cups_options = []
+
+    def choose(name, aliases):
+        value = options.get(name)
+        if value is None:
+            return None
+        if not isinstance(value, str) or not value or "\0" in value:
+            raise ValueError(tr("列印選項 {name} 無效。", name=name))
+        key = next((actual for actual in (available_options or {})
+                    if actual.casefold() in aliases), None)
+        if key is None:
+            raise ValueError(tr("這台印表機不支援列印選項 {name}。", name=name))
+        choices = available_options[key].get("choices", [])
+        actual_value = next((item for item in choices if item.casefold() == value.casefold()), None)
+        if actual_value is None:
+            raise ValueError(tr("印表機不支援指定的列印選項 {name}。", name=name))
+        cups_options.extend((key, actual_value))
+        return actual_value
+
+    page = page_size_choice(available_options, paper_width_mm, paper_height_mm) \
+        if available_options else None
+    if page:
+        cups_options.extend(page)
+
+    media = choose("media", {"mediatype", "media-type", "media", "media-source", "inputslot"})
+    quality = choose("quality", {"cupsprintquality", "quality", "print-quality"})
+    for name in ("brightness", "contrast", "saturation"):
+        choose(name, {name})
+
+    color_mode = options.get("color_mode", "color")
+    if color_mode not in ("color", "grayscale"):
+        raise ValueError(tr("色彩模式必須是 color 或 grayscale。"))
+    ink_key = next((key for key in (available_options or {}) if key.casefold() == "ink"), None)
+    if ink_key:
+        choices = available_options[ink_key].get("choices", [])
+        accepted = {"color", "colour"} if color_mode == "color" else {
+            "mono", "monochrome", "gray", "grayscale", "grey", "greyscale"}
+        ink_value = next((choice for choice in choices if choice.casefold() in accepted), None)
+        if ink_value is not None:
+            cups_options.extend((ink_key, ink_value))
+    from PySide6.QtPrintSupport import QPrinter
+    printer.setColorMode(QPrinter.ColorMode.Color if color_mode == "color"
+                         else QPrinter.ColorMode.GrayScale)
+
+    copies = options.get("copies", 1)
+    if type(copies) is not int or not 1 <= copies <= 999:
+        raise ValueError(tr("列印份數必須介於 1 與 999。"))
+    resolution = options.get("resolution", 300)
+    if type(resolution) is not int or not 72 <= resolution <= 600:
+        raise ValueError(tr("列印解析度必須介於 72 與 600 DPI。"))
+    printer.setCopyCount(copies)
+    printer.setResolution(resolution)
+    printer.setFullPage(True)
+    if cups_options:
+        apply_job_cups_options(printer, cups_options)
+    return {"media": media, "quality": quality, "color_mode": color_mode,
+            "copies": copies, "resolution": resolution, "cups_options": cups_options}
 
 
 def icc_profile_settings_key(printer_name, media_value):

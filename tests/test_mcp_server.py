@@ -258,7 +258,8 @@ class McpProtocolTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(set(tools), {
                 "verona_capabilities", "verona_operating_guide", "verona_list_editors",
                 "verona_editor_state", "verona_command_list", "verona_command_preview",
-                "verona_command_batch_preview", "verona_list_printers", "verona_editor_image",
+                "verona_command_batch_preview", "verona_list_printers", "verona_prepare_print",
+                "verona_print", "verona_editor_image",
                 "verona_ui_screenshot", "verona_ui_inspect", "verona_ui_status",
                 "verona_preview_edit", "verona_add_shape", "verona_add_text",
                 "verona_configure_document", "verona_import_artwork", "verona_retrace_image",
@@ -267,7 +268,7 @@ class McpProtocolTests(unittest.IsolatedAsyncioTestCase):
                 "verona_add_bleed", "verona_apply_edit", "verona_editor_select",
                 "verona_editor_history", "verona_editor_open", "verona_editor_save",
                 "verona_editor_export_pdf", "verona_query_version", "verona_list_usb",
-                "verona_prepare_job", "verona_send_job",
+                "verona_prepare_job", "verona_prepare_job_from_editor", "verona_send_job",
             })
             self.assertTrue(tools["verona_editor_state"].annotations.read_only_hint)
             self.assertTrue(tools["verona_ui_screenshot"].annotations.read_only_hint)
@@ -278,6 +279,9 @@ class McpProtocolTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("verona_add_bleed", tools)
             self.assertTrue(tools["verona_send_job"].annotations.destructive_hint)
             self.assertFalse(tools["verona_send_job"].annotations.idempotent_hint)
+            self.assertTrue(tools["verona_print"].annotations.destructive_hint)
+            self.assertFalse(tools["verona_print"].annotations.idempotent_hint)
+            self.assertIn("explicit consent", tools["verona_prepare_print"].description)
             capabilities = await client.call_tool("verona_capabilities", {})
             self.assertFalse(capabilities.is_error)
             self.assertIsNone(capabilities.structured_content["tcp_endpoint"]["host"])

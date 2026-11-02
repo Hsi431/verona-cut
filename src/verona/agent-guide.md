@@ -463,6 +463,31 @@ and registration marks without submitting a printer job. Both reject existing
 output paths unless overwrite=true is explicitly requested. Obtain authorization
 for the intended output path; file writes cannot be undone through editor undo.
 
+## Prepare, review, and send print and cut jobs
+
+Use `verona_list_editors` and `verona_editor_state` to select the open document and
+record its revision. Call `verona_prepare_print(editor_id, expected_revision,
+printer_name, options)` to validate paper size and printer margins, apply the
+per-job media, quality, color, copy, ICC and brightness settings, and return the
+actual page PNG plus a summary. Preparation does not print or change printer
+defaults. Show the complete PNG and summary, including printer, paper, media,
+color, copies, ICC intent, mark state, registration bounds and revision, then
+obtain the user's explicit consent. Only then call
+`verona_print(print_id, sha256, confirmed_by_user=true)`. It rejects a changed
+editor revision or mismatched SHA-256 and consumes the print ID on its one
+submission attempt; a failed print is never retried automatically.
+
+Call `verona_prepare_job_from_editor(editor_id, expected_revision, force?,
+speed?, tool?, passes?)` to snapshot cut commands directly from the same open,
+possibly unsaved revision. Review its tool settings, bounds, registration range,
+revision, `content_sha256` and payload `sha256`. Compare the print and cut
+`revision`, `content_sha256` and `registration_bounds_mm` before proceeding;
+they must identify the same document version and mark range. After showing the
+prepared cut summary, obtain the user's separate authorization and confirm that
+the intended material and tool are loaded. Then call `verona_send_job` with the
+prepared job ID, payload SHA-256 and `machine_ready=true`. The print consent does
+not authorize cutting, and cut readiness does not authorize printing.
+
 ## Machine operations are separate
 
 The existing verona_prepare_job reads a saved jdesign and snapshots its PLT.

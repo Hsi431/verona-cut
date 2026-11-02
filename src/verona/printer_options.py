@@ -86,6 +86,13 @@ def display_choice(value):
     return " · ".join(tr(part) for part in translated)
 
 
+def display_choice_zh(value):
+    """Return the catalogue's Traditional Chinese name independent of UI language."""
+    parts = value.split("_") if isinstance(value, str) else []
+    translated = [_MEDIA_NAMES.get(part.upper()) for part in parts]
+    return " · ".join(translated) if parts and all(translated) else value
+
+
 def page_size_choice(options, width_mm, height_mm):
     """Find the CUPS PageSize value corresponding to a design's physical size."""
     if (isinstance(width_mm, bool) or isinstance(height_mm, bool)

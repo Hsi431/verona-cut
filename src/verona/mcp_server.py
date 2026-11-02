@@ -1,8 +1,10 @@
 """Local stdio MCP control using the editor's existing encoder and transport."""
 import argparse
 import hashlib
+import json
 import os
 from pathlib import Path
+import stat
 import threading
 from typing import Any, Literal
 import uuid
@@ -10,7 +12,26 @@ import uuid
 from . import commands, transport
 from .device_lock import device_lock
 from .design_validation import validate_document
-from .editor_client import editor_request, list_editors
+from .editor_client import editor_directory, editor_request, list_editors
+
+
+def content_sha256(items, metadata, settings):
+    def canonical(value):
+        if isinstance(value, bool) or value is None:
+            return value
+        if isinstance(value, (int, float)):
+            number = float(value)
+            return 0.0 if number == 0 else number
+        if isinstance(value, dict):
+            return {key: canonical(part) for key, part in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [canonical(part) for part in value]
+        return value
+
+    document = canonical({"items": items, "metadata": metadata, "settings": settings})
+    encoded = json.dumps(document, sort_keys=True, separators=(",", ":"),
+                         ensure_ascii=False, allow_nan=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 class VeronaController:
@@ -20,6 +41,8 @@ class VeronaController:
             transport._ipv4_endpoint(host, port)
         self.jobs = {}
         self.jobs_lock = threading.Lock()
+        self.print_jobs = {}
+        self.print_jobs_lock = threading.Lock()
         state_root = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state"))
         self.lock_path = Path(lock_path) if lock_path else state_root / "verona/mcp-device.lock"
 
@@ -59,6 +82,7 @@ class VeronaController:
         metadata = data.get("metadata", {})
         payload, job = commands.encode_document_job(items, metadata, settings,
             force=force, speed=speed, tool=tool, passes=passes)
+        content_digest = content_sha256(items, metadata, settings)
         contours = job["contours"]
         bounds = job["registration_bounds"]
         registration = metadata.get("print_cut", {})
@@ -67,7 +91,8 @@ class VeronaController:
         job_id = uuid.uuid4().hex
         with self.jobs_lock:
             self.jobs[job_id] = payload
-        return {"job_id": job_id, "sha256": digest, "bytes": len(payload),
+        return {"job_id": job_id, "sha256": digest, "content_sha256": content_digest,
+                "revision": None, "bytes": len(payload),
                 "source": str(path), "contours": len(contours), "points": len(points),
                 "design_bounds_mm": [min(p[0] for p in points), min(p[1] for p in points),
                                      max(p[0] for p in points), max(p[1] for p in points)],
@@ -82,6 +107,54 @@ class VeronaController:
                 "command_start": payload[:200].decode("ascii"),
                 "command_end": payload[-80:].decode("ascii"),
                 "hardware_operations": False}
+
+    def prepare_job_from_editor(self, editor_id, expected_revision, force=None, speed=None,
+                                tool=None, passes=None):
+        prepared = editor_request(editor_id, "prepare_job", {"expected_revision": expected_revision,
+            "force": force, "speed": speed, "tool": tool, "passes": passes})
+        payload_path = Path(prepared.pop("payload_path", ""))
+        directory = editor_directory()
+        if (payload_path.parent != directory or not payload_path.name.startswith(f"{editor_id}.")
+                or not payload_path.name.endswith(".job.plt")):
+            raise ValueError("The editor returned an invalid cut snapshot path.")
+        try:
+            info = payload_path.lstat()
+            if not stat.S_ISREG(info.st_mode):
+                raise ValueError("The editor cut snapshot is not a regular file.")
+            payload = payload_path.read_bytes()
+        finally:
+            payload_path.unlink(missing_ok=True)
+        digest = hashlib.sha256(payload).hexdigest()
+        if digest != prepared.get("sha256"):
+            raise ValueError("The editor cut snapshot SHA-256 does not match; no job was prepared.")
+        job_id = uuid.uuid4().hex
+        with self.jobs_lock:
+            self.jobs[job_id] = payload
+        prepared.update({"job_id": job_id, "sha256": digest})
+        return prepared
+
+    def prepare_print(self, editor_id, expected_revision, printer_name, options):
+        print_id = uuid.uuid4().hex
+        result = editor_request(editor_id, "prepare_print", {"expected_revision": expected_revision,
+            "print_id": print_id, "printer_name": printer_name, "options": options})
+        if result.get("print_id") != print_id:
+            raise ValueError("The editor returned an invalid print_id.")
+        with self.print_jobs_lock:
+            self.print_jobs[print_id] = {"editor_id": editor_id, "sha256": result.get("sha256")}
+        return result
+
+    def print_prepared(self, print_id, sha256, confirmed_by_user):
+        if confirmed_by_user is not True:
+            raise ValueError("Show the prepared preview and summary to the user and obtain explicit consent first.")
+        with self.print_jobs_lock:
+            prepared = self.print_jobs.get(print_id)
+            if prepared is None:
+                raise ValueError("Unknown or already attempted print_id; it cannot be replayed.")
+            if not isinstance(sha256, str) or sha256 != prepared["sha256"]:
+                raise ValueError("Print SHA-256 does not match the prepared snapshot; nothing was printed.")
+            del self.print_jobs[print_id]
+        return editor_request(prepared["editor_id"], "print_prepared", {"print_id": print_id,
+            "sha256": sha256, "confirmed_by_user": confirmed_by_user})
 
     def send_job(self, job_id, sha256, machine_ready, connection="tcp",
                  usb_bus=None, usb_address=None):
@@ -132,7 +205,7 @@ class VeronaController:
 def create_server(controller):
     from mcp.server import MCPServer
     from mcp.server.mcpserver.exceptions import ToolError
-    from mcp.types import ToolAnnotations
+    from mcp.types import TextContent, ToolAnnotations
     from mcp.server.mcpserver.utilities.types import Image
     from mcp_types import TextContent
     from pydantic import StrictBool, StrictFloat, StrictInt
@@ -143,6 +216,9 @@ def create_server(controller):
         "Delivery is not physical completion. No camera capture, abort or firmware update API. "
         "GUI, CLI and MCP operations share a non-blocking device lock. "
         "Startup does not contact the device. Read verona_operating_guide for editing workflows. "
+        "For printing, call verona_prepare_print and show its actual page preview and summary to the user; "
+        "call verona_print only after explicit user consent. For cutting, show the exact prepared job and "
+        "obtain explicit user authorization and machine readiness before verona_send_job. "
         "Use verona_list_editors and verona_editor_state to identify the user's live document. "
         "Preview edits, inspect the returned image and bounds, then apply the exact plan with "
         "its expected revision. Edits are undoable and never send machine commands."))
@@ -225,6 +301,31 @@ def create_server(controller):
         """
         return invoke(editor_request, editor_id, "printers",
             {"paper_width_mm": paper_width_mm, "paper_height_mm": paper_height_mm})
+
+    @server.tool(annotations=preview_annotation, structured_output=False)
+    def verona_prepare_print(editor_id: str, expected_revision: str, printer_name: str,
+                             options: dict[str, Any]) -> list[TextContent | Image]:
+        """Prepare the exact live-editor page and return its PNG preview plus summary; this does not print.
+
+        Show both the returned preview and summary to the user and obtain explicit consent
+        before calling verona_print with confirmed_by_user=true. Options may include media,
+        quality, color_mode, copies, resolution, brightness/contrast/saturation, ICC path,
+        and rendering_intent.
+        """
+        result = invoke(controller.prepare_print, editor_id, expected_revision, printer_name, options)
+        preview_png = result["preview_png"]
+        return [TextContent(text=json.dumps(result, ensure_ascii=False, allow_nan=False)),
+                Image(path=preview_png)]
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True,
+                                            idempotentHint=False))
+    def verona_print(print_id: str, sha256: str, confirmed_by_user: StrictBool) -> dict[str, Any]:
+        """Submit one prepared print only after showing the preview and summary and receiving explicit user consent.
+
+        The editor revision and SHA-256 must still match. Each print_id is consumed before
+        submission, including failures; Verona never automatically retries printing.
+        """
+        return invoke(controller.print_prepared, print_id, sha256, confirmed_by_user)
 
     @server.tool(annotations=readonly)
     def verona_editor_image(editor_id: str, plan_id: str | None = None,
@@ -607,6 +708,20 @@ def create_server(controller):
         None retains saved settings; saved custom=false retains machine force/speed.
         """
         return invoke(controller.prepare_job, design_path, force, speed, tool, passes)
+
+    @server.tool(annotations=preview_annotation)
+    def verona_prepare_job_from_editor(editor_id: str, expected_revision: str,
+                                       force: StrictInt | None = None,
+                                       speed: StrictInt | None = None,
+                                       tool: StrictInt | None = None,
+                                       passes: StrictInt | None = None) -> dict[str, Any]:
+        """Snapshot cut commands from the current unsaved editor revision; does not contact the cutter.
+
+        Review its SHA-256, bounds, registration and machine settings, then use
+        verona_send_job after the user's separate authorization and machine_ready confirmation.
+        """
+        return invoke(controller.prepare_job_from_editor, editor_id, expected_revision,
+                      force, speed, tool, passes)
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True,
                                             idempotentHint=False))

@@ -19,6 +19,18 @@ from .editor_client import editor_directory
 from .layers import cuttable, printable
 
 
+def _make_print_printer(printer_name):
+    from PySide6.QtPrintSupport import QPrinter, QPrinterInfo
+    info = next((candidate for candidate in QPrinterInfo.availablePrinters()
+                 if candidate.printerName() == printer_name), None)
+    if info is None:
+        raise ValueError("The selected print queue is not available.")
+    printer = QPrinter(info, QPrinter.PrinterMode.HighResolution)
+    if not printer.isValid():
+        raise ValueError("The selected print queue is not valid.")
+    return printer
+
+
 class EditorBridge(QObject):
     def __init__(self, window, *, directory=None, listen=True):
         super().__init__(window)
@@ -34,6 +46,7 @@ class EditorBridge(QObject):
                 raise RuntimeError(self.server.errorString())
         self.connections = {}
         self.plans = {}
+        self.print_jobs = {}
         self._digests = {}
         if self.server is not None:
             self.server.newConnection.connect(self._accept)
@@ -46,6 +59,7 @@ class EditorBridge(QObject):
         for path in self.directory.glob(f"{self.editor_id}.*"):
             path.unlink(missing_ok=True)
         self.plans.clear()
+        self.print_jobs.clear()
 
     def _accept(self):
         while self.server.hasPendingConnections():
@@ -457,6 +471,136 @@ class EditorBridge(QObject):
         return {"path": str(destination), "revision": self.revision(),
                 "printed": False, "hardware_operations": False}
 
+    def prepare_print(self, expected_revision, print_id, printer_name, options):
+        self._guard(expected_revision)
+        if (not isinstance(print_id, str) or len(print_id) != 32
+                or any(character not in "0123456789abcdef" for character in print_id)):
+            raise ValueError("Invalid print_id.")
+        if not isinstance(printer_name, str) or not printer_name or len(printer_name) > 1024 or "\0" in printer_name:
+            raise ValueError("Choose a valid printer name from verona_list_printers.")
+        if not isinstance(options, dict):
+            raise ValueError("options must be an object.")
+        options = copy.deepcopy(options)
+        icc_profile_path = options.pop("icc_profile_path", None)
+        rendering_intent = options.pop("rendering_intent", "perceptual")
+        if rendering_intent not in ("perceptual", "relative"):
+            raise ValueError("rendering_intent must be perceptual or relative.")
+        if icc_profile_path is not None:
+            if not isinstance(icc_profile_path, str) or not icc_profile_path or "\0" in icc_profile_path:
+                raise ValueError("icc_profile_path must be a valid file path or omitted.")
+            icc_profile_path = str(Path(icc_profile_path).expanduser().resolve(strict=True))
+            if not Path(icc_profile_path).is_file():
+                raise ValueError("icc_profile_path must refer to a file.")
+
+        from PySide6.QtCore import QSizeF
+        from PySide6.QtGui import QPageLayout, QPageSize
+        from .print_dialog import apply_print_job_options
+        from .printer_options import display_choice_zh, read_printer_options
+        from .printing import (print_page_size, render_print_image, validate_printer,
+                               write_print_preview_png)
+        from .mcp_server import content_sha256
+
+        window = self.window
+        items, metadata = copy.deepcopy(window.items), copy.deepcopy(window.metadata)
+        settings = copy.deepcopy(window._cut_settings())
+        size = print_page_size(items, metadata, calibration=metadata.get("source_format") == "calibration")
+        printer = _make_print_printer(printer_name)
+        page = QPageSize(size, QPageSize.Unit.Millimeter)
+        if not printer.setPageSize(page):
+            raise ValueError("The selected print queue cannot use the design paper size.")
+        printer.setPageOrientation(QPageLayout.Orientation.Landscape if size.width() > size.height()
+                                   else QPageLayout.Orientation.Portrait)
+        available_options = read_printer_options(printer_name)
+        applied = apply_print_job_options(printer, options, available_options,
+                                          size.width(), size.height())
+        validate_printer(printer, items, metadata,
+                         calibration=metadata.get("source_format") == "calibration")
+        image = render_print_image(items, metadata,
+            calibration=metadata.get("source_format") == "calibration",
+            color_profile_path=icc_profile_path, rendering_intent=rendering_intent,
+            dpi=applied["resolution"])
+        preview_path = self.directory / f"{self.editor_id}.{print_id}.print.png"
+        write_print_preview_png(preview_path, image)
+        revision = self.revision()
+        content_digest = content_sha256(items, metadata, settings)
+        registration = metadata["print_cut"]
+        registration_bounds = registration.get("bounds") if registration.get("enabled") else None
+        media_value = applied["media"]
+        result = {"print_id": print_id, "sha256": content_digest, "revision": revision,
+            "content_sha256": content_digest, "preview_png": str(preview_path),
+            "preview_sha256": hashlib.sha256(preview_path.read_bytes()).hexdigest(),
+            "summary": {"printer": printer_name,
+                "paper": f"{size.width():g} × {size.height():g} mm",
+                "media": display_choice_zh(media_value) if media_value else "印表機預設",
+                "quality": display_choice_zh(applied["quality"]) if applied["quality"] else "印表機預設",
+                "color": "彩色" if applied["color_mode"] == "color" else "灰階",
+                "copies": applied["copies"], "resolution_dpi": applied["resolution"],
+                "icc_profile_path": icc_profile_path, "rendering_intent": rendering_intent,
+                "registration_marks_enabled": bool(registration.get("enabled")),
+                "registration_bounds_mm": registration_bounds},
+            "hardware_operations": False, "printed": False}
+        if print_id in self.print_jobs:
+            preview_path.unlink(missing_ok=True)
+            raise ValueError("print_id has already been prepared.")
+        self.print_jobs[print_id] = {"sha256": content_digest, "revision": revision,
+            "preview_png": str(preview_path), "printer": printer, "items": items,
+            "metadata": metadata, "calibration": metadata.get("source_format") == "calibration",
+            "color_profile_path": icc_profile_path, "rendering_intent": rendering_intent}
+        return result
+
+    def print_prepared(self, print_id, sha256, confirmed_by_user):
+        if confirmed_by_user is not True:
+            raise ValueError("Show the prepared preview and summary to the user and obtain explicit consent first.")
+        prepared = self.print_jobs.get(print_id)
+        if prepared is None:
+            raise ValueError("Unknown or already attempted print_id; it cannot be replayed.")
+        if not isinstance(sha256, str) or sha256 != prepared["sha256"]:
+            raise ValueError("Print SHA-256 does not match the prepared snapshot; nothing was printed.")
+        del self.print_jobs[print_id]
+        self._guard(prepared["revision"])
+        from PySide6.QtGui import QImage
+        from .printing import print_document
+        image = QImage(prepared["preview_png"])
+        if image.isNull():
+            raise OSError("The prepared print preview PNG cannot be read; the print_id was consumed.")
+        print_document(prepared["printer"], prepared["items"], prepared["metadata"],
+            calibration=prepared["calibration"], color_profile_path=prepared["color_profile_path"],
+            rendering_intent=prepared["rendering_intent"], rendered_image=image)
+        return {"status": "submitted", "print_id": print_id, "sha256": sha256,
+                "revision": prepared["revision"], "printed": True,
+                "automatic_retry": False, "print_id_consumed": True}
+
+    def prepare_job(self, expected_revision, force=None, speed=None, tool=None, passes=None):
+        self._guard(expected_revision)
+        from .commands import encode_document_job
+        from .mcp_server import content_sha256
+        window = self.window
+        items, metadata = copy.deepcopy(window.items), copy.deepcopy(window.metadata)
+        settings = copy.deepcopy(window._cut_settings())
+        payload, job = encode_document_job(items, metadata, settings,
+            force=force, speed=speed, tool=tool, passes=passes)
+        points = [point for contour in job["contours"] for point in contour]
+        registration = metadata.get("print_cut", {})
+        content_digest = content_sha256(items, metadata, settings)
+        payload_path = self.directory / f"{self.editor_id}.{uuid.uuid4().hex}.job.plt"
+        payload_path.write_bytes(payload)
+        bounds = job["registration_bounds"]
+        return {"payload_path": str(payload_path), "sha256": hashlib.sha256(payload).hexdigest(),
+            "bytes": len(payload), "source": window.current_file or f"editor:{self.editor_id}",
+            "contours": len(job["contours"]), "points": len(points),
+            "design_bounds_mm": [min(p[0] for p in points), min(p[1] for p in points),
+                                 max(p[0] for p in points), max(p[1] for p in points)],
+            "force": job["force"], "speed": job["speed"],
+            "tool": "blade" if job["tool"] == 0 else "pen", "passes": job["passes"],
+            "path_order_enabled": metadata.get("optimize_paths", False),
+            "print_cut": bool(bounds), "registration_bounds_mm": bounds,
+            "registration_offset_mm": list(job["registration_offset"]),
+            "registration_profile": {key: registration[key] for key in
+                ("mark_stroke", "mark_short_length", "paper_width", "paper_height") if key in registration},
+            "command_start": payload[:200].decode("ascii"), "command_end": payload[-80:].decode("ascii"),
+            "revision": expected_revision, "content_sha256": content_digest,
+            "hardware_operations": False}
+
     def dispatch(self, command, **arguments):
         handlers = {"state": self.state, "summary": self.summary, "preview": self.preview, "apply": self.apply,
                     "select": self.select, "history": self.history, "image": self.image,
@@ -464,6 +608,8 @@ class EditorBridge(QObject):
                     "ui_status": self.ui_status,
                     "open_document": self.open_document, "save_document": self.save_document,
                     "export_pdf": self.export_pdf, "printers": self.printers,
+                    "prepare_print": self.prepare_print, "print_prepared": self.print_prepared,
+                    "prepare_job": self.prepare_job,
                     "command_list": self.command_list, "command_preview": self.command_preview,
                     "command_batch_preview": self.command_batch_preview}
         if command not in handlers:
