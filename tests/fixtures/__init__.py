@@ -1,0 +1,1 @@
+"""Generated packing benchmark inputs."""

@@ -123,8 +123,20 @@ class PackingDialog(QDialog):
         self.copies_spin = SafeSpinBox()
         self.copies_spin.setRange(1, 1000)
         self.fill_check = QCheckBox(tr("繼續填滿剩餘範圍"))
-        self.rotate_check = QCheckBox(tr("允許 90 度倍數旋轉"))
+        self.rotate_check = QCheckBox(tr("允許旋轉"))
         self.shape_check = QCheckBox(tr("依實際輪廓排列"))
+        self.pages_check = QCheckBox(tr("放不下的份數另開新分頁"))
+        self.rotation_spin = SafeSpinBox()
+        self.rotation_spin.setRange(5, 90)
+        self.rotation_spin.setSingleStep(5)
+        self.rotation_spin.setSuffix("°")
+        self.rotation_spin.setValue(90)
+        self.rotation_spin.setEnabled(False)
+        self.time_limit_spin = SafeDoubleSpinBox()
+        self.time_limit_spin.setRange(.1, 12)
+        self.time_limit_spin.setSingleStep(.5)
+        self.time_limit_spin.setSuffix(" s")
+        self.time_limit_spin.setValue(12)
         self.gap_spin, self.margin_spin = SafeDoubleSpinBox(), SafeDoubleSpinBox()
         for spin, maximum, value in ((self.gap_spin, 300, 2), (self.margin_spin, 150, 0)):
             spin.setRange(0, maximum)
@@ -135,8 +147,11 @@ class PackingDialog(QDialog):
         form.addRow(tr("間距"), self.gap_spin)
         form.addRow(tr("留邊"), self.margin_spin)
         form.addRow(self.rotate_check)
+        form.addRow(tr("旋轉間隔"), self.rotation_spin)
+        form.addRow(tr("搜尋時間上限"), self.time_limit_spin)
         form.addRow(self.shape_check)
         form.addRow(self.fill_check)
+        form.addRow(self.pages_check)
         preview = QPushButton(tr("預覽"))
         preview.setToolTip(tr("先預覽排版，再套用；圖案維持原尺寸。"))
         preview.clicked.connect(self.preview)
@@ -161,16 +176,22 @@ class PackingDialog(QDialog):
         self.apply_button.setEnabled(False)
         buttons.button(QDialogButtonBox.StandardButton.Cancel).setText(tr("取消"))
         layout.addWidget(buttons)
-        for spin in (self.copies_spin, self.gap_spin, self.margin_spin):
+        for spin in (self.copies_spin, self.gap_spin, self.margin_spin,
+                     self.rotation_spin, self.time_limit_spin):
             spin.valueChanged.connect(self.invalidate)
-        for check in (self.fill_check, self.rotate_check, self.shape_check):
+        for check in (self.fill_check, self.rotate_check, self.shape_check, self.pages_check):
             check.toggled.connect(self.invalidate)
+        self.rotate_check.toggled.connect(self._rotation_controls_changed)
+        self.shape_check.toggled.connect(self._rotation_controls_changed)
 
     def invalidate(self, *_args):
         self.plan = None
         self.apply_button.setEnabled(False)
         self.summary.setText(tr("設定已變更，請重新預覽。"))
         self.summary.show()
+
+    def _rotation_controls_changed(self, *_args):
+        self.rotation_spin.setEnabled(self.rotate_check.isChecked() and self.shape_check.isChecked())
 
     def build_items(self):
         from .packing import pack_items
@@ -180,6 +201,9 @@ class PackingDialog(QDialog):
                 {"copies_per_unit": [self.copies_spin.value()]*len(units),
                  "gap_mm": self.gap_spin.value(), "margin_mm": self.margin_spin.value(),
                  "allow_rotate": self.rotate_check.isChecked(), "shape_aware": self.shape_check.isChecked(),
+                 "rotation_step_deg": self.rotation_spin.value(),
+                 "time_limit_seconds": self.time_limit_spin.value(),
+                 "new_page_for_unplaced": self.pages_check.isChecked(),
                  "fill": self.fill_check.isChecked()})
         return self.plan
 
@@ -192,6 +216,13 @@ class PackingDialog(QDialog):
             self.preview_label.setPixmap(QPixmap(str(path)).scaled(360, 360,
                 Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
             text = tr("共 {copies} 組副本；{objects} 個物件。", copies=details["copies"], objects=len(items))
+            text += " " + tr("紙張使用率 {percent:.1f}%。", percent=details["paper_utilization_percent"])
+            if details["page_count"] > 1:
+                text += " " + tr("共 {pages} 個分頁。", pages=details["page_count"])
+            if details["unplaced_count"]:
+                names = sorted({name for entry in details["unplaced"] for name in entry["objects"]})
+                text += " " + tr("放不下 {count} 份：{objects}", count=details["unplaced_count"],
+                                 objects="、".join(names[:8]))
             if details["limit_reached"]:
                 text += " " + tr("已達本次排版上限。")
             self.summary.setText(text)

@@ -93,30 +93,37 @@ previewed separately with verona_preview_edit.
 verona_pack_objects treats each outer group or standalone selected object as a
 unit, ordered by ascending source index. copies_per_unit gives one positive
 count per unit (defaults to one each). fill=false places all requested copies
-or rejects the plan; a bounded search failure does not prove physical impossibility.
+or rejects the plan; a time-limited search returns its best partial result.
+A bounded search failure does not prove physical impossibility.
 fill=true first places those minimum counts, then adds copies while space and
 limits permit; inspect the reported per-unit counts, which need not keep a ratio.
 Unselected objects are retained; active cutting footprints are obstacles and
 non-cut backgrounds are not. Physical sizes, masks, image affine and within-group
 positions are retained; copies get fresh group IDs.
 
-allow_rotate permits quarter turns. shape_aware uses actual cut/print/bleed
-footprints, conservatively fills enclosed holes and gives open lines a thin
-collision footprint; it can interlock concave shapes but does not nest in holes.
-Default rectangular footprints are faster. Printed artwork also avoids the
-actual L marks with gap_mm clearance. This prevents geometric overlap, not a
-guarantee of camera acquisition. margin_mm and cut adjustment are included.
+allow_rotate permits quarter turns by default. With shape_aware=true,
+rotation_step_deg can add finer angles from 5 to 90 degrees (default 90).
+shape_aware uses actual cut/print/bleed footprints, conservatively fills
+enclosed holes and gives open lines a thin collision footprint; it can interlock
+concave shapes but does not nest in holes. Default rectangular footprints are
+faster. Printed artwork also avoids the actual L marks with gap_mm clearance.
+This prevents geometric overlap, not a guarantee of camera acquisition.
+margin_mm and cut adjustment are included.
 
-The corner/vertex bottom-left heuristic checks at most 20000 candidates with a
-12-second search budget and capped coordinate sets. It is not optimal nesting.
-Read limit_reached, candidate_checks, units and placements (including rotations).
-Preprocessing and rendering are additional time. Capacity is 1000 unit copies,
-2000 objects and 2 million cut points. For many identical regular copies the
-grid fill tool is preferable. Never silently shrink artwork to fit requested counts.
+The bottom-left search checks at most 20000 candidates and 12 seconds by default;
+time_limit_seconds adjusts the time limit. It returns its best layout at a limit
+and marks limit_reached. Read paper_utilization_percent, unplaced_count,
+unplaced, candidate_checks, units and placements (including page and rotation).
+new_page_for_unplaced=true puts requested overflow on up to 100 design tabs with
+the same paper settings when the preview is applied. Preprocessing and rendering
+are additional time. Capacity is 1000 unit copies, 2000 objects and 2 million cut
+points. For many identical regular copies the grid fill tool is preferable.
+Never silently shrink artwork to fit requested counts.
 
 GUI Edit → Automatic layout offers copies per unit, gap/margin, rotation,
-contour footprints and filling. Preview enables Apply; changing settings requires
-another preview. Applying reuses the exact cached layout and creates one undo.
+contour footprints, filling and optional overflow tabs. Preview reports paper
+utilization and unplaced copies; changing settings requires another preview.
+Applying reuses the exact cached layout and creates one undo in each affected tab.
 Cancel preserves work. GUI sets one count for all units; MCP supports individual
 counts. Existing modal-dialog protection prevents concurrent agent mutations.
 

@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import copy
 from pathlib import Path
 import tempfile
 import uuid
@@ -213,9 +214,18 @@ class EditorBridge(QObject):
         selection = sorted(window.selected_indices()) if action in ("configure", "path_order") else object_indices
         items, metadata, settings, selection, details = build_document_edit(
             window.items, window.metadata, window._cut_settings(), selection, action, parameters)
+        details = dict(details)
+        new_pages = details.pop("new_pages", [])
         document = {"format": "verona", "version": 1, "units": "mm",
                     "items": items, "metadata": metadata, "settings": settings}
         items, settings = window._validate_document(document, trusted_items=window.items)
+        validated_pages = []
+        for page in new_pages:
+            page_document = {"format": "verona", "version": 1, "units": "mm",
+                             "items": page["items"], "metadata": metadata, "settings": settings}
+            page_items, page_settings = window._validate_document(page_document, trusted_items=window.items)
+            validated_pages.append({"items": page_items, "selection": page["selection"],
+                                    "settings": page_settings, "metadata": copy.deepcopy(metadata)})
         plan_id = uuid.uuid4().hex
         filename = self.directory / f"{self.editor_id}.{plan_id}.png"
         render_preview(items, metadata, filename)
@@ -223,7 +233,8 @@ class EditorBridge(QObject):
             self._discard_plan(next(iter(self.plans)))
         self.plans[plan_id] = {"revision": expected_revision, "items": items,
                               "selection": selection, "filename": filename,
-                              "metadata": metadata, "settings": settings}
+                              "metadata": metadata, "settings": settings,
+                              "new_pages": validated_pages}
         return {"plan_id": plan_id, "revision": expected_revision, "details": details,
                 "before_objects": len(window.items), "after_objects": len(items),
                 "selection_after": selection, "objects": self._objects(items, metadata=metadata),
@@ -251,6 +262,16 @@ class EditorBridge(QObject):
         window.select_many(plan["selection"])
         window.push_undo(before)
         window.refresh_all()
+        for page in plan.get("new_pages", []):
+            window.new_design()
+            window.metadata = copy.deepcopy(page["metadata"])
+            window._set_cut_settings(page["settings"])
+            before_page = window._snapshot()
+            window.items = page["items"]
+            window.selected, window.selection = -1, set()
+            window.select_many(page["selection"])
+            window.push_undo(before_page)
+            window.refresh_all()
         self._discard_plan(plan_id)
         return self.state()
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import copy
 import ipaddress
 import json
 import math
@@ -1708,12 +1709,25 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         try:
             if dialog.exec() != QDialog.DialogCode.Accepted:
                 return
-            items, selection, _ = dialog.build_items()
+            items, selection, details = dialog.build_items()
+            source_tab = self._active_document
+            metadata, settings = copy.deepcopy(self.metadata), self._cut_settings()
             before = self._snapshot()
             self.items = items
             self.select_many(selection)
             self.push_undo(before)
             self.refresh_all()
+            for page in details.get("new_pages", []):
+                self.new_design()
+                self.metadata = copy.deepcopy(metadata)
+                self._set_cut_settings(settings)
+                before_page = self._snapshot()
+                self.items = page["items"]
+                self.select_many(page["selection"])
+                self.push_undo(before_page)
+                self.refresh_all()
+            if details.get("new_pages"):
+                self.tab_bar.setCurrentIndex(source_tab)
         except (ValueError, OSError) as error:
             QMessageBox.warning(self, tr("自動排版"), str(error))
         finally:

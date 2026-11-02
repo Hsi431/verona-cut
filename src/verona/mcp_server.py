@@ -375,20 +375,31 @@ def create_server(controller):
                               copies_per_unit: list[StrictInt] | None = None,
                               gap_mm: StrictFloat = 2, margin_mm: StrictFloat = 0,
                               allow_rotate: StrictBool = False, shape_aware: StrictBool = False,
-                              fill: StrictBool = False) -> dict[str, Any]:
+                              fill: StrictBool = False, rotation_step_deg: StrictInt = 90,
+                              time_limit_seconds: StrictFloat = 12.0,
+                              new_page_for_unplaced: StrictBool = False) -> dict[str, Any]:
         """Preview mixed-size packing of outer groups and standalone objects, preserving sizes.
 
         Units follow ascending source index. copies_per_unit defaults to1each;
-        fill=false places exactly requested counts or rejects the entire plan.
-        fill=true then adds copies while space/limits permit; per-unit counts
-        are reported. Rotation allows quarter turns. shape_aware uses real
-        footprints (holes filled conservatively), otherwise rectangles.
+        fill=false places exactly requested counts or reports the unplaced copies
+        when the search budget expires. fill=true then adds copies while space/
+        limits permit; per-unit counts are reported. Rotation allows quarter turns
+        by default; rotation_step_deg controls finer contour rotations from 5 to 90.
+        shape_aware uses real footprints (holes filled conservatively), otherwise
+        rectangles.
         Includes print bleed, obstacles and mark clearance for printed artwork.
-        Bounded corner/vertex heuristic:20000checks/12seconds, not optimal nesting.
-        Copies1000/objects2000/cutpoints2million max. Read limit_reached.
+        Deterministic bounded search:20000 candidate checks and 12 seconds by
+        default. At the time limit it returns the best layout and marks
+        limit_reached. Reads paper_utilization_percent and unplaced_count/list.
+        new_page_for_unplaced=true puts requested overflow on up to 100 new design
+        tabs with matching paper settings; apply the preview to create those tabs.
+        Copies1000/objects2000/cutpoints2million max.
         """
         parameters = {"gap_mm": gap_mm, "margin_mm": margin_mm, "allow_rotate": allow_rotate,
-                      "shape_aware": shape_aware, "fill": fill}
+                      "shape_aware": shape_aware, "fill": fill,
+                      "rotation_step_deg": rotation_step_deg,
+                      "time_limit_seconds": time_limit_seconds,
+                      "new_page_for_unplaced": new_page_for_unplaced}
         if copies_per_unit is not None:
             parameters["copies_per_unit"] = copies_per_unit
         return invoke(editor_request, editor_id, "preview",

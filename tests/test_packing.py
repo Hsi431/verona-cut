@@ -149,8 +149,11 @@ class PackingTests(unittest.TestCase):
                            {"shape_aware": 1}, {"copies_per_unit": []}):
             with self.subTest(parameters=parameters), self.assertRaises(ValueError):
                 pack_items(items, metadata, [0], parameters)
-        with patch("verona.packing.time.monotonic", side_effect=[0, 0, 20]), self.assertRaises(ValueError):
-            pack_items(items, metadata, [0], {"copies_per_unit": [2]})
+        with patch("verona.packing.time.monotonic", side_effect=[0, 0, 20]):
+            partial, _, details = pack_items(items, metadata, [0], {"copies_per_unit": [2]})
+        self.assertEqual(details["copies"], 1)
+        self.assertEqual(details["unplaced_count"], 1)
+        self.assertTrue(details["limit_reached"])
         self.assertEqual(items, original)
 
     def test_gui_applies_exact_cached_preview_and_undoes_as_one_step(self):
