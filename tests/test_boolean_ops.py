@@ -86,6 +86,15 @@ class BooleanPathTests(unittest.TestCase):
                 self.assertTrue(all(polygon_area(c) > 0 and not has_proper_self_crossing(c)
                                     for c in result[0]["contours"]))
 
+    def test_welded_text_is_no_longer_editable_text(self):
+        items, *_ = build_document_edit([], {}, {}, [], "add_text",
+                                        {"text": "O", "x_mm": 20, "y_mm": 20, "height_mm": 20})
+        self.assertIn("text_data", items[0])
+        items.append(rectangle("bar", 15, 25, 40, 5))
+        result, _, _ = build_edit(items, {}, [0, 1], "boolean", {"mode": "weld"})
+        self.assertNotIn("text_data", result[0])
+        self.assertNotIn("text_source_contours", result[0])
+
     def test_welding_two_rings_keeps_both_holes(self):
         result, _, _ = build_edit([ring("left", 40, 80), ring("right", 80, 80)],
                                   {}, [0, 1], "boolean", {"mode": "weld"})

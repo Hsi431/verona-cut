@@ -130,6 +130,9 @@ def build_edit(items, metadata, indices, action, parameters):
         contours = boolean_contours([items[index] for index in selected], parameters.get("mode"))
         result[base_index]["contours"] = contours
         result[base_index].pop("node_paths", None)
+        # The welded outline is no longer the typeset text it came from.
+        result[base_index].pop("text_data", None)
+        result[base_index].pop("text_source_contours", None)
         result = [item for index, item in enumerate(result)
                   if index == base_index or index not in selected]
         details.update(mode=parameters["mode"], operands=len(selected),
