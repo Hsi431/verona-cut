@@ -25,6 +25,18 @@ smaller. Existing Qt editor functionality remains available to the user.
 4. Object indices belong to the returned revision. Do not carry indices across
    edits without checking the new state. Never overwrite a revision conflict.
 
+## Inspect the visible interface
+
+Use `verona_ui_screenshot` when the visible editor layout matters, such as
+checking whether an import shows a warning, whether a dialog has the expected
+values, or whether a finished layout looks right. Choose `window`,
+`active_dialog` or `canvas`; the dialog target requires an open dialog. Use
+`verona_ui_inspect` to read visible control labels, input values, enabled and
+checked state, geometry and registered command IDs. Use `verona_ui_status` for
+the active document tab, status text, bounds warning, transfer state and open
+dialog title. These tools only observe the interface and do not focus controls,
+change documents or activate actions.
+
 ## Know which geometry does what
 
 - A bitmap, its image mask and its cutting contours are separate data.

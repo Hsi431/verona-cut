@@ -205,6 +205,35 @@ class McpControllerTests(unittest.TestCase):
 
 @unittest.skipUnless(HAS_MCP, "optional MCP SDK is not installed")
 class McpProtocolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_ui_tools_register_read_only_and_screenshot_returns_image(self):
+        from mcp_types import ImageContent, TextContent
+        from PySide6.QtGui import QImage
+        server = create_server(VeronaController())
+        tools = {tool.name: tool for tool in server._tool_manager.list_tools()}
+        self.assertEqual(len(tools), 35)
+        for name in ("verona_ui_screenshot", "verona_ui_inspect", "verona_ui_status"):
+            self.assertTrue(tools[name].annotations.read_only_hint)
+        screenshot_tool = tools["verona_ui_screenshot"]
+        arguments = screenshot_tool.fn_metadata.validate_arguments({
+            "editor_id": "123-0123456789ab", "target": "canvas", "max_width_px": 320})
+        temporary_root = Path("/tmp/mcp-ui-view-tests")
+        temporary_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temporary_root) as temp:
+            image_path = Path(temp) / "example.png"
+            image = QImage(3, 2, QImage.Format.Format_ARGB32)
+            image.fill(0xFFFFFFFF)
+            image.save(str(image_path))
+            with patch("verona.mcp_server.editor_request", return_value={
+                    "path": str(image_path), "width_px": 320,
+                    "height_px": 200, "format": "png"}) as request:
+                output = screenshot_tool.fn(**arguments)
+                result = screenshot_tool.fn_metadata.convert_result(output)
+        request.assert_called_once()
+        self.assertEqual(len(result.content), 2)
+        self.assertIsInstance(result.content[0], TextContent)
+        self.assertIn("320 × 200 px", result.content[0].text)
+        self.assertIsInstance(result.content[1], ImageContent)
+
     async def test_sdk_rejects_coerced_readiness_and_boolean_force(self):
         from mcp.server.mcpserver.exceptions import ToolError
         with tempfile.TemporaryDirectory() as tmp:
@@ -225,11 +254,12 @@ class McpProtocolTests(unittest.IsolatedAsyncioTestCase):
         async with Client(parameters, read_timeout_seconds=10) as client:
             tools = await client.list_tools()
             tools = {tool.name: tool for tool in tools.tools}
-            self.assertEqual(len(tools), 32)
+            self.assertEqual(len(tools), 35)
             self.assertEqual(set(tools), {
                 "verona_capabilities", "verona_operating_guide", "verona_list_editors",
                 "verona_editor_state", "verona_command_list", "verona_command_preview",
                 "verona_command_batch_preview", "verona_list_printers", "verona_editor_image",
+                "verona_ui_screenshot", "verona_ui_inspect", "verona_ui_status",
                 "verona_preview_edit", "verona_add_shape", "verona_add_text",
                 "verona_configure_document", "verona_import_artwork", "verona_retrace_image",
                 "verona_link_cut_paths", "verona_fill_area", "verona_pack_objects",
@@ -240,6 +270,9 @@ class McpProtocolTests(unittest.IsolatedAsyncioTestCase):
                 "verona_prepare_job", "verona_send_job",
             })
             self.assertTrue(tools["verona_editor_state"].annotations.read_only_hint)
+            self.assertTrue(tools["verona_ui_screenshot"].annotations.read_only_hint)
+            self.assertTrue(tools["verona_ui_inspect"].annotations.read_only_hint)
+            self.assertTrue(tools["verona_ui_status"].annotations.read_only_hint)
             self.assertFalse(tools["verona_apply_edit"].annotations.destructive_hint)
             self.assertIn("verona_fill_area", tools)
             self.assertIn("verona_add_bleed", tools)

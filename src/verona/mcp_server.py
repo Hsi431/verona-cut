@@ -134,6 +134,7 @@ def create_server(controller):
     from mcp.server.mcpserver.exceptions import ToolError
     from mcp.types import ToolAnnotations
     from mcp.server.mcpserver.utilities.types import Image
+    from mcp_types import TextContent
     from pydantic import StrictBool, StrictFloat, StrictInt
     server = MCPServer("Verona", instructions=(
         "Prepare and review the exact job before sending. machine_ready asserts current user "
@@ -236,6 +237,29 @@ def create_server(controller):
         """
         result = invoke(editor_request, editor_id, "image", {"plan_id": plan_id, "view": view})
         return Image(path=result["path"])
+
+    @server.tool(annotations=readonly)
+    def verona_ui_screenshot(editor_id: str,
+                             target: Literal["window", "active_dialog", "canvas"] = "window",
+                             max_width_px: StrictInt = 1600) -> list[TextContent | Image]:
+        """Capture the current editor window, open dialog or canvas without changing it."""
+        result = invoke(editor_request, editor_id, "ui_screenshot",
+                        {"target": target, "max_width_px": max_width_px})
+        caption = f"PNG saved to {result['path']} ({result['width_px']} × {result['height_px']} px)."
+        return [TextContent(type="text", text=caption), Image(path=result["path"])]
+
+    @server.tool(annotations=readonly)
+    def verona_ui_inspect(editor_id: str,
+                          target: Literal["window", "active_dialog", "canvas"] = "window",
+                          max_depth: StrictInt = 8) -> dict[str, Any]:
+        """Read visible widget text, state and geometry without interacting with controls."""
+        return invoke(editor_request, editor_id, "ui_inspect",
+                      {"target": target, "max_depth": max_depth})
+
+    @server.tool(annotations=readonly)
+    def verona_ui_status(editor_id: str) -> dict[str, Any]:
+        """Read current tabs, status text, bounds warning, transfer state and dialog title."""
+        return invoke(editor_request, editor_id, "ui_status")
 
     @server.tool(annotations=preview_annotation)
     def verona_preview_edit(editor_id: str, expected_revision: str,

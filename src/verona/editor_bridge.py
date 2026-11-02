@@ -460,6 +460,8 @@ class EditorBridge(QObject):
     def dispatch(self, command, **arguments):
         handlers = {"state": self.state, "summary": self.summary, "preview": self.preview, "apply": self.apply,
                     "select": self.select, "history": self.history, "image": self.image,
+                    "ui_screenshot": self.ui_screenshot, "ui_inspect": self.ui_inspect,
+                    "ui_status": self.ui_status,
                     "open_document": self.open_document, "save_document": self.save_document,
                     "export_pdf": self.export_pdf, "printers": self.printers,
                     "command_list": self.command_list, "command_preview": self.command_preview,
@@ -467,6 +469,18 @@ class EditorBridge(QObject):
         if command not in handlers:
             raise ValueError("Unsupported editor command; no device operations are available here.")
         return handlers[command](**arguments)
+
+    def ui_screenshot(self, target="window", max_width_px=1600):
+        from .ui_introspection import screenshot
+        return screenshot(self.window, self.directory, self.editor_id, target, max_width_px)
+
+    def ui_inspect(self, target="window", max_depth=8):
+        from .ui_introspection import inspect
+        return inspect(self.window, target, max_depth)
+
+    def ui_status(self):
+        from .ui_introspection import status
+        return status(self.window)
 
     def printers(self, paper_width_mm=210, paper_height_mm=297):
         from .editor_actions import finite_number
