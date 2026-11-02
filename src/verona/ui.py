@@ -44,6 +44,8 @@ from .device_lock import device_lock
 from .editor_widgets import CollapsibleSection, SafeDoubleSpinBox, SafeSpinBox, WheelGuard
 from .themes import THEMES, palette as theme_palette, stylesheet as theme_stylesheet
 from .grouping import expand_selection, group_items, ungroup_items, remap_group_ids, selection_units as group_units
+from .text_tool import (TextLayoutDialog, installed_font_family, render_text_path,
+                        text_transform, transform_text_contours)
 
 
 def _display_name(name: str) -> str:
@@ -1168,6 +1170,13 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         nodes = QAction(tr("編輯節點與曲線…"), self)
         nodes.triggered.connect(self.edit_nodes)
         edit_menu.addAction(nodes)
+        self.edit_text_action = QAction(tr("編輯文字…"), self)
+        self.edit_text_action.triggered.connect(self.edit_selected_text)
+        edit_menu.addAction(self.edit_text_action)
+        self.outline_text_action = QAction(tr("轉成輪廓"), self)
+        self.outline_text_action.setShortcut("Ctrl+Shift+O")
+        self.outline_text_action.triggered.connect(self.convert_selected_text_to_outlines)
+        edit_menu.addAction(self.outline_text_action)
         printed = QAction(tr("設定向量列印…"), self)
         printed.triggered.connect(self.edit_vector_print)
         edit_menu.addAction(printed)
@@ -1268,6 +1277,9 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         menu.addSeparator()
         for action in (self.duplicate_action, self.delete_action):
             menu.addAction(action)
+        menu.addSeparator()
+        menu.addAction(self.edit_text_action)
+        menu.addAction(self.outline_text_action)
         menu.addSeparator()
         menu.addAction(self.group_action)
         menu.addAction(self.ungroup_action)
@@ -1834,6 +1846,9 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
             self.select_all_action.setEnabled(bool(self.items))
             self.group_action.setEnabled(unit_count >= 2)
             self.ungroup_action.setEnabled(has_group)
+            text_indices = [i for i in self.selected_indices() if "text_data" in self.items[i]]
+            self.edit_text_action.setEnabled(enabled and not blocked and self.selected in text_indices)
+            self.outline_text_action.setEnabled(bool(text_indices) and not blocked)
         self.object_name.setEnabled(enabled and not blocked)
         for control in (self.width_spin, self.height_spin, self.x_spin, self.y_spin, *self.selection_edit_buttons):
             control.setEnabled(count > 0 and not blocked)
@@ -2184,11 +2199,17 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         self.canvas.set_zoom(1.0)
         self.zoom_label.setText("100%")
 
-    def _add_path(self, name: str, path: QPainterPath) -> None:
+    def _add_path(self, name: str, path: QPainterPath, text_data: dict[str, Any] | None = None) -> None:
         path.translate(PAGE_WIDTH_MM / 2 - path.boundingRect().center().x(),
                        PAGE_HEIGHT_MM / 2 - path.boundingRect().center().y())
         before = self._snapshot()
-        self.items.append({"name": name, "contours": _flatten(path), "cut": True})
+        item = {"name": name, "contours": _flatten(path), "cut": True}
+        if text_data is not None:
+            bounds = path.boundingRect()
+            text_data["origin_mm"] = [bounds.left(), bounds.top()]
+            item["text_data"] = text_data
+            item["text_source_contours"] = item["contours"]
+        self.items.append(item)
         self.push_undo(before)
         self.select(len(self.items) - 1)
 
@@ -2203,14 +2224,58 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         self._add_path(tr("圓形"), path)
 
     def add_text(self) -> None:
-        text, accepted = QInputDialog.getText(self, tr("建立文字輪廓"), tr("文字"))
-        if not accepted or not text:
+        dialog = TextLayoutDialog(parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        path = QPainterPath()
-        font = QFont("Noto Sans")
-        font.setPointSizeF(10 * 72 / 25.4)
-        path.addText(QPointF(0, 10), font, text)
-        self._add_path(tr("文字輪廓"), path)
+        try:
+            data = dialog.text_parameters()
+            self._add_path(tr("文字輪廓"), render_text_path(data), data)
+        except ValueError as error:
+            QMessageBox.warning(self, tr("文字設定無效"), str(error))
+
+    def edit_selected_text(self) -> None:
+        if len(self.selected_indices()) != 1 or self._selection_blocked():
+            return
+        index = self.selected
+        item = self.items[index]
+        data = item.get("text_data")
+        if not isinstance(data, dict):
+            return
+        if not installed_font_family(data.get("font_family", "")):
+            QMessageBox.warning(self, tr("字型不存在"), tr(
+                "找不到字型「{family}」；請選擇替代字型。", family=data.get("font_family", "")))
+        dialog = TextLayoutDialog(data, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            updated = dialog.text_parameters()
+            transform = text_transform(item["text_source_contours"], item["contours"])
+            source_path = render_text_path(updated, tuple(data["origin_mm"]))
+            source_contours = _flatten(source_path)
+            outlines = transform_text_contours(source_contours, transform)
+            if not outlines:
+                raise ValueError(tr("文字必須包含可顯示的字元。"))
+        except (KeyError, ValueError) as error:
+            QMessageBox.warning(self, tr("無法編輯文字"), str(error))
+            return
+        before = self._snapshot()
+        item["text_data"] = updated
+        item["text_source_contours"] = source_contours
+        item["contours"] = outlines
+        if self._snapshot() != before:
+            self.push_undo(before)
+            self.refresh_all()
+
+    def convert_selected_text_to_outlines(self) -> None:
+        indices = [i for i in self.selected_indices() if "text_data" in self.items[i]]
+        if not indices or self._selection_blocked():
+            return
+        before = self._snapshot()
+        for index in indices:
+            self.items[index].pop("text_data", None)
+            self.items[index].pop("text_source_contours", None)
+        self.push_undo(before)
+        self.refresh_all()
 
     def import_svg(self) -> None:
         filename, _ = QFileDialog.getOpenFileName(self, tr("匯入 SVG"), "", tr("SVG 向量圖 (*.svg)"))

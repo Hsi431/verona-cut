@@ -229,10 +229,12 @@ existing contours retain their source sampling resolution.
 ### Create artwork and configure the document
 
 verona_add_shape previews a rectangle or ellipse using top-left X/Y and width /
-height in mm. verona_add_text previews text outlines using a font em size in mm,
-not an exact visible glyph height. Inspect the returned resolved_font and image
-for fallback fonts or missing characters. Created objects are cut outlines;
-they do not become printed artwork merely by being created.
+height in mm. verona_add_text keeps its existing font_size_mm em-size argument;
+optional font_family selects an installed font, height_mm sets visible glyph
+height, and letter_spacing_mm sets added spacing between characters. It reports
+resolved_font. Verona design files retain editable text parameters while preview,
+print and cut output use the saved vector outlines. Created objects are cut
+outlines; they do not become printed artwork merely by being created.
 
 verona_configure_document previews saved cut settings (custom, force, speed,
 tool, passes) and registration settings (enabled, paper_width, paper_height, margins,

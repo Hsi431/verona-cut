@@ -670,6 +670,26 @@ class DesignCanvas(QWidget):
             menu.deleteLater()
         event.accept()
 
+    def mouseDoubleClickEvent(self, event: Any) -> None:
+        if not self.interactive or event.button() != Qt.MouseButton.LeftButton:
+            event.ignore()
+            return
+        point = self._world_point(event.position())
+        hit = self.item_at(point)
+        if hit < 0:
+            for index in range(len(self.owner.items)-1, -1, -1):
+                item = self.owner.items[index]
+                if ("text_data" in item and item.get("visible", True) and editable(item)
+                        and self.item_path(item).controlPointRect().contains(point)):
+                    hit = index
+                    break
+        if hit >= 0 and "text_data" in self.owner.items[hit]:
+            self.owner.select(hit)
+            self.owner.edit_selected_text()
+            event.accept()
+            return
+        event.ignore()
+
     def mousePressEvent(self, event: Any) -> None:
         if not self.interactive or event.button() != Qt.MouseButton.LeftButton:
             return

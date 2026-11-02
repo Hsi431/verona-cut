@@ -238,16 +238,22 @@ def create_server(controller):
     @server.tool(annotations=preview_annotation)
     def verona_add_text(editor_id: str, expected_revision: str, text: str,
                          x_mm: StrictFloat, y_mm: StrictFloat, font_size_mm: StrictFloat = 10,
-                         font_family: str = "Noto Sans") -> dict[str, Any]:
-        """Preview text converted to cut outlines. Font size is the em size, not the glyph height.
+                         font_family: str = "Noto Sans", height_mm: StrictFloat | None = None,
+                         letter_spacing_mm: StrictFloat = 0.0) -> dict[str, Any]:
+        """Preview editable text outlines. font_size_mm remains the legacy em size.
 
-        Reports the resolved font family; inspect the preview for fallback fonts
-        and missing glyphs. Text becomes outlines, not editable typeset text.
+        Optional height_mm sets the visible glyph height; optional letter_spacing_mm
+        sets the added spacing between characters. Reports the resolved font family.
         """
+        parameters = {"text": text, "x_mm": x_mm, "y_mm": y_mm,
+                      "font_size_mm": font_size_mm, "font_family": font_family}
+        if height_mm is not None:
+            parameters["height_mm"] = height_mm
+        if letter_spacing_mm:
+            parameters["letter_spacing_mm"] = letter_spacing_mm
         return invoke(editor_request, editor_id, "preview",
             {"expected_revision": expected_revision, "action": "add_text", "object_indices": [],
-             "parameters": {"text": text, "x_mm": x_mm, "y_mm": y_mm,
-                            "font_size_mm": font_size_mm, "font_family": font_family}})
+             "parameters": parameters})
 
     @server.tool(annotations=preview_annotation)
     def verona_configure_document(editor_id: str, expected_revision: str,

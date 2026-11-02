@@ -10,6 +10,7 @@ from typing import Any
 from .geometry import copy_items as _copy_items
 from .i18n import tr
 from .document_state import default_cut_settings
+from .input_safety import MAX_POINTS
 from .view_constants import PAGE_HEIGHT_MM, PAGE_WIDTH_MM
 
 
@@ -38,8 +39,20 @@ def validate_document(data: Any, trusted_items=()) -> tuple[list[dict[str, Any]]
         raise ValueError(tr("設計檔缺少 items 清單。"))
     from .input_safety import check_geometry_budget
     check_geometry_budget(raw_items)
+    raw_points = 0
+    for raw_item in raw_items:
+        if not isinstance(raw_item, dict):
+            continue
+        for key in ("contours", "image_clip", "text_source_contours"):
+            contours = raw_item.get(key)
+            if isinstance(contours, list):
+                raw_points += sum(len(contour) for contour in contours if isinstance(contour, list))
+                if raw_points > MAX_POINTS:
+                    raise ValueError(tr("展開點數超過 {limit} 點，請簡化路徑或拆分文件後重試。",
+                                        limit=f"{MAX_POINTS:,}"))
     items = []
     trusted = {}
+    text_source_points = 0
     for item in trusted_items:
         trusted.setdefault(_trust_key(item), []).append(item)
     for number, raw_item in enumerate(raw_items, 1):
@@ -56,6 +69,43 @@ def validate_document(data: Any, trusted_items=()) -> tuple[list[dict[str, Any]]
             raise ValueError(tr("第 {number} 個物件沒有路徑。", number=number))
         safe_item = {"name": raw_item["name"],
                      "contours": validate_contours(contours, number)}
+        if "text_data" in raw_item or "text_source_contours" in raw_item:
+            text_data = raw_item.get("text_data")
+            if (not isinstance(text_data, dict) or "text_source_contours" not in raw_item
+                    or "image_data" in raw_item or raw_item.get("registration_guide")):
+                raise ValueError(tr("第 {number} 個物件的文字資料無效。", number=number))
+            allowed_text = {"content", "font_family", "font_style", "height_mm",
+                            "letter_spacing_mm", "line_spacing_mm", "alignment", "origin_mm"}
+            if set(text_data) != allowed_text:
+                raise ValueError(tr("第 {number} 個物件的文字資料無效。", number=number))
+            content, family, style, alignment = (text_data.get("content"), text_data.get("font_family"),
+                                                   text_data.get("font_style"), text_data.get("alignment"))
+            if (not isinstance(content, str) or not content.strip() or len(content) > 1024
+                    or not isinstance(family, str) or not family.strip() or len(family) > 256
+                    or not isinstance(style, str) or len(style) > 256
+                    or alignment not in ("left", "center", "right")):
+                raise ValueError(tr("第 {number} 個物件的文字資料無效。", number=number))
+            numbers = [text_data.get(key) for key in ("height_mm", "letter_spacing_mm", "line_spacing_mm")]
+            limits = ((.1, 300), (-5, 50), (0, 300))
+            if any(isinstance(value, bool) or not isinstance(value, (int, float))
+                       or not math.isfinite(value) or not lower <= value <= upper
+                       for value, (lower, upper) in zip(numbers, limits)):
+                raise ValueError(tr("第 {number} 個物件的文字資料無效。", number=number))
+            origin = text_data.get("origin_mm")
+            if (not isinstance(origin, (list, tuple)) or len(origin) != 2
+                    or any(isinstance(value, bool) or not isinstance(value, (int, float))
+                           or not math.isfinite(value) for value in origin)):
+                raise ValueError(tr("第 {number} 個物件的文字資料無效。", number=number))
+            source = validate_contours(raw_item["text_source_contours"], number)
+            text_source_points += sum(map(len, source))
+            if (len(source) != len(safe_item["contours"])
+                    or any(len(left) != len(right) for left, right in zip(source, safe_item["contours"]))
+                    or text_source_points > MAX_POINTS):
+                raise ValueError(tr("第 {number} 個物件的文字資料無效。", number=number))
+            safe_item["text_data"] = {**text_data, "height_mm": float(numbers[0]),
+                "letter_spacing_mm": float(numbers[1]), "line_spacing_mm": float(numbers[2]),
+                "origin_mm": [float(origin[0]), float(origin[1])]}
+            safe_item["text_source_contours"] = source
         if "node_paths" in raw_item:
             from .nodes import validate_saved_paths
             safe_item["node_paths"] = validate_saved_paths(safe_item, raw_item["node_paths"])
@@ -140,6 +190,13 @@ def validate_document(data: Any, trusted_items=()) -> tuple[list[dict[str, Any]]
                 ("trace_options", "trace_mask", "raster_bleed_mm", "raster_bleed_scale")):
             raise ValueError("Saved tracing state requires an image object.")
         items.append(safe_item)
+
+    expanded_points = sum(len(contour) for item in items
+                          for key in ("contours", "image_clip", "text_source_contours")
+                          for contour in item.get(key, []))
+    if expanded_points > MAX_POINTS:
+        raise ValueError(tr("展開點數超過 {limit} 點，請簡化路徑或拆分文件後重試。",
+                            limit=f"{MAX_POINTS:,}"))
 
     defaults = default_cut_settings()
     raw_settings = data.get("settings", {})

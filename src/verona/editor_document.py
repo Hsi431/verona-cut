@@ -2,8 +2,8 @@
 import copy
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, QRectF
-from PySide6.QtGui import QFont, QFontInfo, QImageReader, QPainterPath, QTransform
+from PySide6.QtCore import QRectF
+from PySide6.QtGui import QImageReader, QPainterPath, QTransform
 
 from .editor_actions import build_edit, cutting_frame, finite_number
 from .geometry import copy_items as _copy_items, flatten_path as _flatten, transform_item as _transform_item
@@ -201,7 +201,8 @@ def build_document_edit(items, metadata, settings, selection, action, parameters
 
     allowed = ({"shape", "x_mm", "y_mm", "width_mm", "height_mm", "name"}
                if action == "add_shape" else
-               {"text", "x_mm", "y_mm", "font_size_mm", "font_family", "name"})
+               {"text", "x_mm", "y_mm", "font_size_mm", "font_family", "font_style",
+                "height_mm", "letter_spacing_mm", "name"})
     if set(parameters) - allowed:
         raise ValueError("Unknown creation parameters.")
     x = finite_number(parameters.get("x_mm", 20), "x_mm", -300, 600)
@@ -216,27 +217,42 @@ def build_document_edit(items, metadata, settings, selection, action, parameters
         (path.addRect if shape == "rectangle" else path.addEllipse)(QRectF(x, y, width, height))
         name = parameters.get("name", shape)
     else:
+        from .text_tool import (make_text_data, render_legacy_text, render_text_path,
+                                resolved_font_family)
         text = parameters.get("text")
         family = parameters.get("font_family", "Noto Sans")
         if not isinstance(text, str) or not text.strip() or len(text) > 1024:
             raise ValueError("text must contain 1–1024 characters with visible content.")
         if not isinstance(family, str) or not family.strip() or len(family) > 256:
             raise ValueError("Choose a font family.")
+        style = parameters.get("font_style", "")
+        if not isinstance(style, str) or len(style) > 256:
+            raise ValueError("Choose a font style.")
+        spacing = finite_number(parameters.get("letter_spacing_mm", 0), "letter_spacing_mm", -5, 50)
         size = finite_number(parameters.get("font_size_mm", 10), "font_size_mm", .1, 100)
-        font = QFont(family)
-        font.setPixelSize(1000)
-        path.addText(QPointF(0, 0), font, text)
-        path = QTransform.fromScale(size/1000, size/1000).map(path)
-        path.translate(x, y+size)
+        if "height_mm" in parameters:
+            height = finite_number(parameters["height_mm"], "height_mm", .1, 100)
+            data = make_text_data(text, family, style, height, spacing, height * 1.2,
+                                  "left", (x, y))
+            path = render_text_path(data)
+        else:
+            path, data, resolved = render_legacy_text(text, family, size, x, y,
+                                                       style=style, letter_spacing_mm=spacing)
         name = parameters.get("name", text[:80])
-        details.update(requested_font=family, resolved_font=QFontInfo(font).family(),
-                       font_size_mm=size)
+        details.update(requested_font=family, resolved_font=resolved if "height_mm" not in parameters
+                       else resolved_font_family(family, style), font_size_mm=size)
+        if "height_mm" in parameters:
+            details["height_mm"] = data["height_mm"]
     if not isinstance(name, str) or not name.strip() or len(name) > 1024:
         raise ValueError("Choose an object name of 1–1024 characters.")
     contours = _flatten(path)
     if not contours:
         raise ValueError("The chosen text or shape has no outline.")
-    result.append({"name": name, "contours": contours, "cut": True})
+    item = {"name": name, "contours": contours, "cut": True}
+    if action == "add_text":
+        item["text_data"] = data
+        item["text_source_contours"] = contours
+    result.append(item)
     if len(result) > 2000 or sum(len(c) for item in result for c in item["contours"]) > 2_000_000:
         raise ValueError("This edit exceeds the 2000-object / 2-million-cut-point limit.")
     return result, metadata, settings, [len(result)-1], details

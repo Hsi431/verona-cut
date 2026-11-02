@@ -14,12 +14,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QPoint, Qt, QSettings, QMarginsF
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QInputDialog, QToolButton
+from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QInputDialog, QToolButton, QDialog
 from types import SimpleNamespace
 
 from verona import core, commands
 from verona.i18n import get_language, set_language
 from verona.ui import VeronaWindow, PlotPreviewCanvas, _item_path
+from verona.text_tool import make_text_data
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -398,7 +399,10 @@ class DesignUiTests(unittest.TestCase):
         svg = ROOT / "examples" / "sample-design.svg"
         with patch.object(QFileDialog, "getOpenFileName", return_value=(str(svg), "SVG")):
             self.window.import_svg()
-        with patch.object(QInputDialog, "getText", return_value=("Juliet", True)):
+        with patch("verona.ui.TextLayoutDialog") as text_dialog:
+            text_dialog.return_value.exec.return_value = QDialog.DialogCode.Accepted
+            text_dialog.return_value.text_parameters.return_value = make_text_data(
+                "Juliet", "Noto Sans", "Regular", 10, 0, 12)
             self.window.add_text()
         self.assertGreater(len(self.window.items[1]["contours"]), 1)
         self.window.custom_settings.setChecked(True)
