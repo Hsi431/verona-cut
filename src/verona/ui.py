@@ -16,7 +16,7 @@ from typing import Any
 
 from PySide6.QtCore import QEvent, QObject, QPointF, QRunnable, QRectF, Qt, QThreadPool, QSettings, QTimer, Signal, Slot
 from PySide6.QtGui import (
-    QAction, QActionGroup, QCursor, QFont, QIcon, QPainterPath, QPixmap, QTransform,
+    QAction, QActionGroup, QCursor, QFont, QIcon, QMouseEvent, QPainterPath, QPixmap, QTransform,
 )
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
@@ -114,6 +114,7 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         self._tab_state()
         self._refresh_tab_titles()
         self._alt_mouse_grab = False
+        self._alt_mouse_target = None
 
     def showEvent(self, event) -> None:
         # Route file drops from child widgets and track viewport resizing.
@@ -131,6 +132,52 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         if QWidget.mouseGrabber() is self.canvas:
             self.canvas.releaseMouse()
         self._alt_mouse_grab = False
+        self._alt_mouse_target = None
+
+    @staticmethod
+    def _forward_mouse_event(target: QWidget, event: QMouseEvent) -> None:
+        global_pos = event.globalPosition()
+        forwarded = QMouseEvent(
+            event.type(), QPointF(target.mapFromGlobal(global_pos.toPoint())), global_pos,
+            event.button(), event.buttons(), event.modifiers())
+        QApplication.sendEvent(target, forwarded)
+
+    def _handle_alt_mouse_grab_event(self, watched, event) -> bool:
+        kind = event.type()
+        target = self._alt_mouse_target
+        if target is not None and kind in (QEvent.Type.MouseMove, QEvent.Type.MouseButtonRelease):
+            if watched is target:
+                if kind == QEvent.Type.MouseButtonRelease:
+                    self._alt_mouse_target = None
+                return False
+            if kind == QEvent.Type.MouseButtonRelease:
+                self._alt_mouse_target = None
+            self._forward_mouse_event(target, event)
+            event.accept()
+            return True
+
+        if not self._alt_mouse_grab:
+            return False
+        if kind == QEvent.Type.KeyRelease:
+            alt_is_down = bool(QApplication.queryKeyboardModifiers() & Qt.KeyboardModifier.AltModifier)
+            if event.key() == Qt.Key.Key_Alt or not alt_is_down:
+                self._release_alt_grab()
+                if event.key() == Qt.Key.Key_Alt:
+                    event.accept()
+                    return True
+        if kind == QEvent.Type.MouseButtonPress:
+            if event.modifiers() & Qt.KeyboardModifier.AltModifier:
+                return False
+            global_pos = event.globalPosition()
+            target = self.childAt(self.mapFromGlobal(global_pos.toPoint()))
+            self._release_alt_grab()
+            if target is None or target is self.canvas:
+                return False
+            self._alt_mouse_target = target
+            self._forward_mouse_event(target, event)
+            event.accept()
+            return True
+        return False
 
     def eventFilter(self, watched, event) -> bool:
         kind = event.type()
@@ -148,9 +195,7 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         if (kind == QEvent.Type.Resize and hasattr(self, "canvas_scroll")
                 and watched is self.canvas_scroll.viewport()):
             self._schedule_page_fit()
-        if kind == QEvent.Type.KeyRelease and event.key() == Qt.Key.Key_Alt and self._alt_mouse_grab:
-            self._release_alt_grab()
-            event.accept()
+        if self._handle_alt_mouse_grab_event(watched, event):
             return True
         if kind in (QEvent.Type.WindowDeactivate, QEvent.Type.Hide, QEvent.Type.FocusOut):
             if watched in (self, self.canvas) and self._alt_mouse_grab:
