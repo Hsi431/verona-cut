@@ -125,6 +125,12 @@ class DesignCanvas(QWidget):
         self._zoom_timer = QTimer(self)
         self._zoom_timer.setSingleShot(True)
         self._zoom_timer.timeout.connect(self._restore_zoom_anchor)
+        self._nudge_before = None
+        self._nudge_key = None
+        self._nudge_redo = None
+        self._nudge_timer = QTimer(self)
+        self._nudge_timer.setSingleShot(True)
+        self._nudge_timer.timeout.connect(self.finish_nudge)
         self.interactive = interactive
         self.drag_start: QPointF | None = None
         self.drag_index = -1
@@ -147,7 +153,10 @@ class DesignCanvas(QWidget):
         self.setAcceptDrops(True)
         self.setMouseTracking(True)
         self.setToolTip(tr("右鍵開啟物件選單；Shift 拖曳鎖定水平／垂直，Alt 拖曳複製。\n"
-                           "拖曳四角縮放、上方圓點旋轉；Shift 旋轉每次 15°；Esc 取消拖曳。"))
+                           "方向鍵移動選取物件 0.1 mm，Shift 為 1 mm；Ctrl／Alt 滾輪以游標為中心縮放，"
+                           "Shift 滾輪水平捲動。\nCtrl+C／X／V 複製、剪下、貼上；Ctrl+Shift+V 原位貼上；"
+                           "Backspace 刪除；Esc 取消選取。拖曳四角縮放、上方圓點旋轉；"
+                           "Shift 旋轉每次 15°；Esc 取消拖曳。"))
         self._resize_to_page()
 
     def _resize_to_page(self) -> None:
@@ -407,6 +416,7 @@ class DesignCanvas(QWidget):
     def mousePressEvent(self, event: Any) -> None:
         if not self.interactive or event.button() != Qt.MouseButton.LeftButton:
             return
+        self.finish_nudge()
         self.setFocus()
         self.drag_toggle_selection = None
         if self.space_pressed:
@@ -573,7 +583,16 @@ class DesignCanvas(QWidget):
         self.owner._refresh_tab_titles()
 
     def wheelEvent(self, event: Any) -> None:
-        if not event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+        modifiers = event.modifiers()
+        if modifiers & Qt.KeyboardModifier.ShiftModifier and not modifiers & (
+                Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier):
+            delta = event.pixelDelta().y() or event.angleDelta().y()
+            if delta:
+                bar = self.owner.canvas_scroll.horizontalScrollBar()
+                bar.setValue(bar.value() - delta)
+            event.accept()
+            return
+        if not modifiers & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier):
             event.ignore()
             return
         target = event.position() + QPointF(self.pos())
@@ -582,7 +601,8 @@ class DesignCanvas(QWidget):
         else:
             previous_point, previous_target = self._zoom_anchor
             point = previous_point + (target - previous_target) / self.zoom
-        self.owner.change_zoom(1.25 ** (event.angleDelta().y() / 120))
+        delta = event.angleDelta().y() or event.pixelDelta().y()
+        self.owner.change_zoom(1.25 ** (delta / 120))
         self._zoom_anchor = point, target
         self._zoom_timer.start(0)
         event.accept()
@@ -602,26 +622,63 @@ class DesignCanvas(QWidget):
         self.update()
 
     def keyPressEvent(self, event: Any) -> None:
-        if event.key() == Qt.Key.Key_Escape and self.marquee_start is not None:
+        key = event.key()
+        if key in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down):
+            if event.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier):
+                self.finish_nudge()
+                super().keyPressEvent(event)
+                return
+            nudge_key = (key, bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier))
+            if (self._nudge_before is not None
+                    and (not event.isAutoRepeat() or self._nudge_key != nudge_key)):
+                self.finish_nudge()
+            selected = self.owner.selected_indices()
+            if self.interactive and selected and not self.owner._selection_blocked():
+                if self._nudge_before is None:
+                    before = self.owner._snapshot()
+                    self._nudge_redo = list(self.owner.redo_stack)
+                    self.owner.push_undo(before)
+                    self._nudge_before = before
+                    self._nudge_key = nudge_key
+                step = 1.0 if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else 0.1
+                dx = step if key == Qt.Key.Key_Right else -step if key == Qt.Key.Key_Left else 0
+                dy = step if key == Qt.Key.Key_Down else -step if key == Qt.Key.Key_Up else 0
+                transform = QTransform.fromTranslate(dx, dy)
+                for index in sorted(selected):
+                    _transform_item(self.owner.items[index], transform)
+                self.geometryChanged.emit()
+                self.update()
+                self._nudge_timer.start(450)
+            event.accept()
+        else:
+            self.finish_nudge()
+        if key == Qt.Key.Key_Escape and self.marquee_start is not None:
             before = self.marquee_before
             self.marquee_start = self.marquee_end = None
             self.owner.select_many(before)
             event.accept()
-        elif event.key() == Qt.Key.Key_Escape and self.drag_before is not None:
+        elif key == Qt.Key.Key_Escape and self.drag_before is not None:
             self.owner._restore(self.drag_before)
             self.drag_before = self.drag_start = self.drag_handle = self.drag_bounds = None
             self.drag_toggle_selection = None
             self.drag_index = -1
             event.accept()
-        elif event.key() == Qt.Key.Key_Space:
+        elif key == Qt.Key.Key_Escape and self.interactive and self.pan_start is None:
+            self.owner.select_many([])
+            event.accept()
+        elif key == Qt.Key.Key_Space:
             if not event.isAutoRepeat():
                 self.space_pressed = True
                 self.setCursor(Qt.CursorShape.OpenHandCursor)
             event.accept()
-        else:
+        elif key not in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down):
             super().keyPressEvent(event)
 
     def keyReleaseEvent(self, event: Any) -> None:
+        if (event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down)
+                and not event.isAutoRepeat() and self._nudge_key is not None
+                and event.key() == self._nudge_key[0]):
+            self.finish_nudge()
         if event.key() == Qt.Key.Key_Space:
             if not event.isAutoRepeat():
                 self.space_pressed = False
@@ -631,7 +688,23 @@ class DesignCanvas(QWidget):
             super().keyReleaseEvent(event)
 
     def focusOutEvent(self, event: Any) -> None:
+        self.finish_nudge()
         self.mouseReleaseEvent(None)
         self.space_pressed = False
         self.setCursor(Qt.CursorShape.ArrowCursor)
         super().focusOutEvent(event)
+
+    def finish_nudge(self) -> None:
+        before = self._nudge_before
+        if before is None:
+            return
+        self._nudge_timer.stop()
+        self._nudge_before = None
+        self._nudge_key = None
+        if self.owner._snapshot() == before:
+            if self.owner.undo_stack and self.owner.undo_stack[-1] == before:
+                self.owner.undo_stack.pop()
+            self.owner.redo_stack = self._nudge_redo or []
+            self.owner._refresh_history_actions()
+        self._nudge_redo = None
+        self.owner._refresh_tab_titles()

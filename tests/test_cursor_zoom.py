@@ -62,7 +62,7 @@ class CursorZoomTests(unittest.TestCase):
         position = QPointF(canvas.mapFrom(viewport, viewport_point))
         global_position = QPointF(canvas.mapToGlobal(position.toPoint()))
         event = QWheelEvent(position, global_position, QPoint(0, 0), QPoint(0, delta),
-                            Qt.MouseButton.NoButton, Qt.KeyboardModifier.ShiftModifier,
+                            Qt.MouseButton.NoButton, Qt.KeyboardModifier.ControlModifier,
                             Qt.ScrollPhase.NoScrollPhase, False)
         self.app.sendEvent(canvas, event)
         if process:

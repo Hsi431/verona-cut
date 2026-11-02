@@ -99,6 +99,7 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         self._fit_timer.setSingleShot(True)
         self._fit_timer.timeout.connect(self._apply_page_fit)
         self._ratio_locked = True
+        self._clipboard_items: list[dict[str, Any]] = []
         self.settings = QSettings("Verona", "Workspace")
         self.theme_name = self.settings.value("theme", "light", type=str)
         self._build_ui()
@@ -388,7 +389,9 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         path_layout = QVBoxLayout(path_content)
         path_layout.setContentsMargins(0, 4, 0, 4)
         self.path_section = CollapsibleSection(tr("路徑設定"), path_content)
-        self.path_section.setToolTip(tr("Ctrl／Shift 點選可多選；Shift 滾輪縮放。"))
+        self.path_section.setToolTip(tr("Ctrl／Shift 點選可多選；Ctrl／Alt 滾輪以游標為中心縮放；"
+                                        "Shift 滾輪水平捲動。名稱、X、Y、寬度與高度按 Enter "
+                                        "或移開焦點即可套用。"))
         layout.addWidget(self.path_section)
         geometry = QFormLayout()
         geometry.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
@@ -431,10 +434,10 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         path_layout.addLayout(output)
         self.width_spin.valueChanged.connect(lambda value: self._dimension_changed("width", value))
         self.height_spin.valueChanged.connect(lambda value: self._dimension_changed("height", value))
-        apply_size = QPushButton(tr("套用尺寸"))
-        self.selection_edit_buttons = [apply_size]
-        apply_size.clicked.connect(self.apply_size)
-        path_layout.addWidget(apply_size)
+        self.selection_edit_buttons = []
+        for control in (self.object_name, self.x_spin, self.y_spin,
+                        self.width_spin, self.height_spin):
+            control.editingFinished.connect(self.apply_size)
         transform_content = QWidget()
         transform_layout = QVBoxLayout(transform_content)
         transform_layout.setContentsMargins(0, 4, 0, 4)
@@ -994,16 +997,55 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
                                      self.tab_bar.setCurrentIndex((self._active_document + delta) % len(self._documents)))
             file_menu.addAction(action)
         edit_menu = self.menuBar().addMenu(tr("編輯"))
+        self.copy_action = QAction(tr("複製所選物件"), self)
+        self.copy_action.setShortcut("Ctrl+C")
+        self.copy_action.triggered.connect(self.copy_selected)
+        edit_menu.addAction(self.copy_action)
+        self.cut_action = QAction(tr("剪下所選物件"), self)
+        self.cut_action.setShortcut("Ctrl+X")
+        self.cut_action.triggered.connect(self.cut_selected)
+        edit_menu.addAction(self.cut_action)
+        self.paste_action = QAction(tr("貼上物件"), self)
+        self.paste_action.setShortcut("Ctrl+V")
+        self.paste_action.triggered.connect(self.paste_selected)
+        edit_menu.addAction(self.paste_action)
+        self.paste_in_place_action = QAction(tr("原位貼上物件"), self)
+        self.paste_in_place_action.setShortcut("Ctrl+Shift+V")
+        self.paste_in_place_action.triggered.connect(lambda: self.paste_selected(in_place=True))
+        edit_menu.addAction(self.paste_in_place_action)
+        edit_menu.addSeparator()
         self.duplicate_action = QAction(tr("複製物件"), self)
         self.duplicate_action.setShortcut("Ctrl+D")
         self.duplicate_action.triggered.connect(self.duplicate_selected)
         edit_menu.addAction(self.duplicate_action)
         self.delete_action = QAction(tr("刪除物件"), self)
-        self.delete_action.setShortcut("Delete")
+        self.delete_action.setShortcuts(["Delete", "Backspace"])
         self.delete_action.triggered.connect(self.delete_selected)
         edit_menu.addAction(self.delete_action)
         edit_menu.addAction(self.undo_action)
         edit_menu.addAction(self.redo_action)
+        self.deselect_action = QAction(tr("取消選取"), self)
+        self.deselect_action.setShortcut("Ctrl+Shift+A")
+        self.deselect_action.triggered.connect(lambda: self.select_many([]))
+        edit_menu.addAction(self.deselect_action)
+        edit_menu.addSeparator()
+        order_menu = edit_menu.addMenu(tr("排列順序"))
+        self.bring_forward_action = QAction(tr("上移一層"), self)
+        self.bring_forward_action.setShortcut("Ctrl+]")
+        self.bring_forward_action.triggered.connect(lambda: self.move_layers(1))
+        order_menu.addAction(self.bring_forward_action)
+        self.send_backward_action = QAction(tr("下移一層"), self)
+        self.send_backward_action.setShortcut("Ctrl+[")
+        self.send_backward_action.triggered.connect(lambda: self.move_layers(-1))
+        order_menu.addAction(self.send_backward_action)
+        self.bring_to_front_action = QAction(tr("移至最上層"), self)
+        self.bring_to_front_action.setShortcut("Ctrl+Shift+]")
+        self.bring_to_front_action.triggered.connect(lambda: self.move_layers(2))
+        order_menu.addAction(self.bring_to_front_action)
+        self.send_to_back_action = QAction(tr("移至最下層"), self)
+        self.send_to_back_action.setShortcut("Ctrl+Shift+[")
+        self.send_to_back_action.triggered.connect(lambda: self.move_layers(-2))
+        order_menu.addAction(self.send_to_back_action)
         self.group_action = QAction(tr("群組"), self)
         self.group_action.setShortcut("Ctrl+G")
         self.group_action.triggered.connect(self.group_selected)
@@ -1046,6 +1088,19 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
                                 ("文字輪廓", self.add_text)):
             self.insert_menu.addAction(tr(label), callback)
         appearance_menu = self.menuBar().addMenu(tr("外觀"))
+        self.zoom_in_action = QAction(tr("放大"), self)
+        self.zoom_in_action.setShortcuts(["Ctrl+=", "Ctrl++"])
+        self.zoom_in_action.triggered.connect(lambda: self.change_zoom(1.25))
+        appearance_menu.addAction(self.zoom_in_action)
+        self.zoom_out_action = QAction(tr("縮小"), self)
+        self.zoom_out_action.setShortcut("Ctrl+-")
+        self.zoom_out_action.triggered.connect(lambda: self.change_zoom(0.8))
+        appearance_menu.addAction(self.zoom_out_action)
+        self.zoom_100_action = QAction(tr("顯示 100%"), self)
+        self.zoom_100_action.setShortcut("Ctrl+1")
+        self.zoom_100_action.triggered.connect(self.zoom_actual_size)
+        appearance_menu.addAction(self.zoom_100_action)
+        appearance_menu.addSeparator()
         appearance_menu.addAction(self.fit_height_action)
         appearance_menu.addSeparator()
         theme_group = QActionGroup(self)
@@ -1091,7 +1146,7 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         for label, buttons in (
                 ("排列順序", (self.layer_panel.up, self.layer_panel.down)),
                 ("對齊與均分", self.alignment_buttons.values()),
-                ("變形", self.selection_edit_buttons[1:])):
+                ("變形", self.selection_edit_buttons)):
             submenu = menu.addMenu(tr(label))
             for button in buttons:
                 action = QAction(button.text(), submenu)
@@ -1253,11 +1308,18 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         if not selected or self._selection_blocked():
             return
         order = list(range(len(self.items)))
-        positions = range(len(order) - 2, -1, -1) if direction > 0 else range(1, len(order))
-        for position in positions:
-            neighbor = position + (1 if direction > 0 else -1)
-            if order[position] in selected and order[neighbor] not in selected:
-                order[position], order[neighbor] = order[neighbor], order[position]
+        if direction > 1:
+            order = [index for index in order if index not in selected] + [
+                index for index in order if index in selected]
+        elif direction < -1:
+            order = [index for index in order if index in selected] + [
+                index for index in order if index not in selected]
+        else:
+            positions = range(len(order) - 2, -1, -1) if direction > 0 else range(1, len(order))
+            for position in positions:
+                neighbor = position + (1 if direction > 0 else -1)
+                if order[position] in selected and order[neighbor] not in selected:
+                    order[position], order[neighbor] = order[neighbor], order[position]
         if order == list(range(len(self.items))):
             return
         before = self._snapshot()
@@ -1271,6 +1333,8 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         self.select_many([index] if index >= 0 else [])
 
     def select_many(self, indices) -> None:
+        if getattr(self.canvas, "_nudge_before", None) is not None:
+            self.canvas.finish_nudge()
         self.selection = expand_selection(self.items, indices)
         self.selected = max(self.selection, default=-1)
         self.refresh_properties()
@@ -1575,6 +1639,13 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         if hasattr(self, "group_action"):
             self.duplicate_action.setEnabled(count > 0 and not blocked)
             self.delete_action.setEnabled(count > 0 and not blocked)
+            self.copy_action.setEnabled(count > 0 and not blocked)
+            self.cut_action.setEnabled(count > 0 and not blocked)
+            self.paste_action.setEnabled(bool(self._clipboard_items))
+            self.paste_in_place_action.setEnabled(bool(self._clipboard_items))
+            for action in (self.bring_forward_action, self.send_backward_action,
+                           self.bring_to_front_action, self.send_to_back_action):
+                action.setEnabled(count > 0 and not blocked)
             self.select_all_action.setEnabled(bool(self.items))
             self.group_action.setEnabled(unit_count >= 2)
             self.ungroup_action.setEnabled(has_group)
@@ -1824,6 +1895,13 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         self.canvas.set_zoom(self.canvas.zoom * factor)
         self.zoom_label.setText(f"{round(self.canvas.zoom * 100)}%")
 
+    def zoom_actual_size(self) -> None:
+        self._fit_page_height = False
+        self.fit_height_action.setChecked(False)
+        self._fit_timer.stop()
+        self.canvas.set_zoom(1.0)
+        self.zoom_label.setText("100%")
+
     def _add_path(self, name: str, path: QPainterPath) -> None:
         path.translate(PAGE_WIDTH_MM / 2 - path.boundingRect().center().x(),
                        PAGE_HEIGHT_MM / 2 - path.boundingRect().center().y())
@@ -2027,7 +2105,8 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         if len(indices) == 1:
             item = self.items[indices[0]]
             item["name"] = self.object_name.text() or item.get("name", "路徑")
-        self.push_undo(before)
+        if before["items"] != self.items:
+            self.push_undo(before)
         self.refresh_all()
 
     def _dimension_changed(self, axis: str, value: float) -> None:
@@ -2041,6 +2120,39 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         target.setValue(value * (bounds.height() / bounds.width() if axis == "width"
                                  else bounds.width() / bounds.height()))
         target.blockSignals(False)
+
+    def copy_selected(self) -> None:
+        if self._selection_blocked():
+            return
+        indices = sorted(self.selected_indices())
+        if not indices:
+            return
+        self._clipboard_items = _copy_items([self.items[index] for index in indices])
+        self.paste_action.setEnabled(True)
+        self.paste_in_place_action.setEnabled(True)
+
+    def cut_selected(self) -> None:
+        if self._selection_blocked() or not self.selected_indices():
+            return
+        self.copy_selected()
+        self.delete_selected()
+
+    def paste_selected(self, *, in_place: bool = False) -> None:
+        if not self._clipboard_items:
+            return
+        before = self._snapshot()
+        copies = _copy_items(self._clipboard_items)
+        remap_group_ids(copies)
+        if not in_place:
+            transform = QTransform.fromTranslate(5, 5)
+            for item in copies:
+                _transform_item(item, transform)
+        for item in copies:
+            item["name"] = tr("{name} 複本", name=_display_name(item.get("name", "路徑")))
+        start = len(self.items)
+        self.items.extend(copies)
+        self.push_undo(before)
+        self.select_many(range(start, len(self.items)))
 
     def duplicate_selected(self) -> None:
         if self._selection_blocked():

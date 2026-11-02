@@ -84,6 +84,8 @@ class DocumentWorkspace:
         self.document.saved_snapshot = value
 
     def _tab_state(self) -> DocumentState:
+        if getattr(self.canvas, "_nudge_before", None) is not None:
+            self.canvas.finish_nudge()
         self.document.view = {
             "zoom": self.canvas.zoom,
             "pan_offset": (self.canvas._view_offset.x(), self.canvas._view_offset.y()),
@@ -137,6 +139,8 @@ class DocumentWorkspace:
     def close_document(self, index: int) -> bool:
         if not 0 <= index < len(self._documents):
             return False
+        if getattr(self.canvas, "_nudge_before", None) is not None:
+            self.canvas.finish_nudge()
         self.tab_bar.setCurrentIndex(index)
         if not self._maybe_save_changes():
             return False
@@ -160,6 +164,8 @@ class DocumentWorkspace:
         return self.document.snapshot()
 
     def push_undo(self, previous: dict[str, Any]) -> None:
+        if getattr(self.canvas, "_nudge_before", None) is not None:
+            self.canvas.finish_nudge()
         self.document.push_undo(previous)
         self._refresh_history_actions()
         self._refresh_tab_titles()
@@ -170,12 +176,16 @@ class DocumentWorkspace:
             self.redo_action.setEnabled(bool(self.redo_stack))
 
     def undo(self) -> None:
+        if getattr(self.canvas, "_nudge_before", None) is not None:
+            self.canvas.finish_nudge()
         if self.document.undo():
             self._set_cut_settings(self.document.settings)
             self.native_preview_action.setEnabled(bool(self.metadata.get("source_preview")))
             self.refresh_all()
 
     def redo(self) -> None:
+        if getattr(self.canvas, "_nudge_before", None) is not None:
+            self.canvas.finish_nudge()
         if self.document.redo():
             self._set_cut_settings(self.document.settings)
             self.native_preview_action.setEnabled(bool(self.metadata.get("source_preview")))

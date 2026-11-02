@@ -39,8 +39,9 @@ normal editing and cutting work offline.
   the file tools. Fixed rulers along the workspace's top and left edges stay in
   place as the canvas scrolls, with ticks tracking the view. The bottom status
   strip is compact and shows Stop only while sending; cut preview/export/send
-  are in the right panel. Shift+wheel zooms the main canvas in either direction
-  around the pointer. English/Traditional Chinese and light/dark themes.
+  are in the right panel. Ctrl/Alt+wheel zooms the main canvas around the
+  pointer; Shift+wheel scrolls horizontally. English/Traditional Chinese and
+  light/dark themes.
 - **Desktop integration:** double-click designs into the existing workspace,
   reuse tabs for already-open files, and show LDS thumbnails in supported file managers.
 - **Local tools:** a dry-run-first CLI, read-only cutter information,
@@ -147,6 +148,7 @@ Reinstalling is required after pulling changes when installed with `pip install 
    **Post-edit → Add / adjust bleed…**. Use **Post-edit → Smooth cutlines…** to
    compare and apply a bounded smoothing edit to selected vector or image cutlines;
    undo restores the original paths.
+
 3. **Set up the sheet.** Choose paper dimensions and, for Print & Cut, matching
    registration marks. Print-only sheets do not require registration marks.
 4. **Print.** Use the toolbar button beside the import controls or `Ctrl+P`.
@@ -156,6 +158,14 @@ Reinstalling is required after pulling changes when installed with `pip install 
    for cut preview, PLT export or sending. Enter the cutter's displayed IPv4
    address under **Connection**, check the connection, review tool/force/speed
    and **Cut passes** (1–10), then explicitly send the job.
+
+### Canvas shortcuts
+
+Arrow keys move selected objects by 0.1 mm; Shift+arrows move 1 mm. Ctrl+C/X/V
+copy, cut and paste; Ctrl+Shift+V pastes in place. Delete or Backspace removes
+the selection. Ctrl+] / Ctrl+[ moves layers forward/backward; add Shift to move
+to the front/back. Ctrl+= or Ctrl++ zooms in, Ctrl+- zooms out, Ctrl+1 shows 100%, and
+Ctrl+0 fits page height. Esc or Ctrl+Shift+A deselects.
 
 Previewing or changing print settings does not submit a job. After successful
 submission, printer/media preferences are remembered locally and included when

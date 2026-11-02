@@ -174,13 +174,29 @@ class EditorWorkflowTests(unittest.TestCase):
                             modifiers, Qt.ScrollPhase.ScrollUpdate, False)
         QApplication.sendEvent(canvas, event)
 
-    def test_only_shift_wheel_changes_canvas_zoom(self):
+    def test_ctrl_wheel_zooms_and_shift_wheel_scrolls_horizontally(self):
+        self.window.show()
+        self.app.processEvents()
+        self.window._fit_timer.stop()
+        self.window._fit_page_height = False
         canvas = self.window.canvas
+        canvas.set_zoom(4.0)
+        self.app.processEvents()
         original = canvas.zoom
         self._wheel(Qt.KeyboardModifier.NoModifier)
         self.assertEqual(canvas.zoom, original)
-        self._wheel(Qt.KeyboardModifier.ShiftModifier)
+        self._wheel(Qt.KeyboardModifier.ControlModifier)
         self.assertNotEqual(canvas.zoom, original)
+
+        canvas.set_zoom(4.0)
+        self.app.processEvents()
+        bar = self.window.canvas_scroll.horizontalScrollBar()
+        bar.setValue(min(100, bar.maximum()))
+        original = canvas.zoom
+        scroll = bar.value()
+        self._wheel(Qt.KeyboardModifier.ShiftModifier)
+        self.assertEqual(canvas.zoom, original)
+        self.assertLess(bar.value(), scroll)
 
     @staticmethod
     def _send_mouse(canvas, event_type, local_pos, button, buttons, modifiers):
