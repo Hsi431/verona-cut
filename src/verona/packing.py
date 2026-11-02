@@ -15,6 +15,12 @@ from .layers import cuttable, printable
 from .geometry import copy_items as _copy_items, transform_item as _transform_item
 
 
+PACKING_PARAMETER_NAMES = {
+    "gap_mm", "margin_mm", "copies_per_unit", "fill", "allow_rotate", "shape_aware",
+    "rotation_step_deg", "time_limit_seconds", "new_page_for_unplaced",
+}
+
+
 def _footprint(items, shape_aware):
     shape, printed = QPainterPath(), QPainterPath()
     box = None
@@ -92,9 +98,7 @@ def _material_area(items):
 
 def _pack_single(items, metadata, indices, parameters, *, allow_partial=False,
                  candidate_limit=20000, deadline=None):
-    allowed = {"gap_mm", "margin_mm", "copies_per_unit", "fill", "allow_rotate", "shape_aware",
-               "rotation_step_deg", "time_limit_seconds", "new_page_for_unplaced"}
-    if not isinstance(parameters, dict) or set(parameters) - allowed:
+    if not isinstance(parameters, dict) or set(parameters) - PACKING_PARAMETER_NAMES:
         raise ValueError("Unknown packing parameters.")
     gap = finite_number(parameters.get("gap_mm", 2), "gap_mm", 0, 300)
     margin = finite_number(parameters.get("margin_mm", 0), "margin_mm", 0, 150)
@@ -326,7 +330,8 @@ def _pack_single(items, metadata, indices, parameters, *, allow_partial=False,
 
 def pack_items(items, metadata, indices, parameters):
     """Pack selected units on one page, optionally continuing on new pages."""
-    if not isinstance(parameters, dict):
+    if (not isinstance(parameters, dict)
+            or set(parameters) - PACKING_PARAMETER_NAMES):
         raise ValueError("Unknown packing parameters.")
     time_limit = finite_number(parameters.get("time_limit_seconds", 12), "time_limit_seconds", .05, 60)
     if type(parameters.get("new_page_for_unplaced", False)) is not bool:

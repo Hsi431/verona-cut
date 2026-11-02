@@ -46,8 +46,7 @@ from .device_lock import device_lock
 from .editor_widgets import CollapsibleSection, SafeDoubleSpinBox, SafeSpinBox, WheelGuard
 from .themes import THEMES, palette as theme_palette, stylesheet as theme_stylesheet
 from .grouping import expand_selection, group_items, ungroup_items, remap_group_ids, selection_units as group_units
-from .text_tool import (TextLayoutDialog, installed_font_family, render_text_path,
-                        text_transform, transform_text_contours)
+from .text_tool import TextLayoutDialog, installed_font_family, render_text_path
 
 
 def _display_name(name: str) -> str:
@@ -116,6 +115,8 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         self.resize(1280, 800)
         self._documents: list[DocumentState] = [DocumentState()]
         self._active_document = 0
+        self._multi_tab_undo: list[dict[str, Any]] = []
+        self._multi_tab_redo: list[dict[str, Any]] = []
         self._closing = False
         self._closed = False
         self._tasks: dict[FunctionTask, tuple[Any, Any]] = {}
@@ -1206,12 +1207,11 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         nodes.triggered.connect(self.edit_nodes)
         edit_menu.addAction(nodes)
         self.edit_text_action = QAction(tr("編輯文字…"), self)
-        self._tag_menu_exclusion(self.edit_text_action, "edit.edit_text")
+        self._tag_command_action(self.edit_text_action, "text.edit")
         self.edit_text_action.triggered.connect(self.edit_selected_text)
         edit_menu.addAction(self.edit_text_action)
         self.outline_text_action = QAction(tr("轉成輪廓"), self)
-        self._tag_menu_exclusion(self.outline_text_action, "edit.outline_text")
-        self.outline_text_action.setShortcut("Ctrl+Shift+O")
+        self._tag_command_action(self.outline_text_action, "text.outline")
         self.outline_text_action.triggered.connect(self.convert_selected_text_to_outlines)
         edit_menu.addAction(self.outline_text_action)
         printed = QAction(tr("設定向量列印…"), self)
@@ -1245,6 +1245,9 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
                                 ("文字輪廓", self.add_text, "text.add")):
             action = self.insert_menu.addAction(tr(label), callback)
             self._tag_command_action(action, command_id)
+        data_merge = self.insert_menu.addAction(tr("資料組批次產生…"))
+        self._tag_command_action(data_merge, "data.merge")
+        data_merge.triggered.connect(self.data_merge_selected)
         appearance_menu = self.menuBar().addMenu(tr("外觀"))
         self.zoom_in_action = QAction(tr("放大"), self)
         self._tag_menu_exclusion(self.zoom_in_action, "view.zoom_in")
@@ -1347,6 +1350,8 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
     def _execute_registered_command(self, command_id: str, object_indices=None, parameters=None):
         from .command_registry import command_availability, command_for_step
         from .editor_document import build_document_edit
+        source_document = self.document
+        source_tab = self._active_document
         indices = sorted(self.selected_indices()) if object_indices is None else object_indices
         parameters = {} if parameters is None else parameters
         enabled, reason = command_availability(self.items, command_id, indices)
@@ -1357,12 +1362,13 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         before_count = len(self.items)
         items, metadata, settings, selected, details = build_document_edit(
             self.items, self.metadata, self._cut_settings(), selection, action, resolved)
+        new_pages = details.pop("new_pages", [])
         if command_id == "edit.duplicate":
             from .i18n import tr
             for item in items[before_count:]:
                 item["name"] = tr("{name} 複本", name=item.get("name", "路徑"))
         changed = (items != self.items or metadata != self.metadata or settings != self._cut_settings())
-        if changed:
+        if changed or new_pages:
             before = self._snapshot()
             self.items, self.metadata = items, metadata
             self._set_cut_settings(settings)
@@ -1370,7 +1376,114 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
             self.select_many(selected)
             self.push_undo(before)
             self.refresh_all()
+            if new_pages:
+                page_documents = []
+                for page in new_pages:
+                    self.new_design()
+                    self.metadata = copy.deepcopy(metadata)
+                    self._set_cut_settings(settings)
+                    before_page = self._snapshot()
+                    self.items = page["items"]
+                    self.select_many(page["selection"])
+                    self.push_undo(before_page)
+                    self.refresh_all()
+                    page_documents.append(self.document)
+                self.tab_bar.setCurrentIndex(source_tab)
+                self._register_multi_tab_operation(source_document, page_documents)
         return details
+
+    @staticmethod
+    def _document_is_in(documents, target):
+        return any(document is target for document in documents)
+
+    def _register_multi_tab_operation(self, source_document, page_documents):
+        if not page_documents:
+            return
+        self._multi_tab_redo.clear()
+        self._multi_tab_undo.append({
+            "source": source_document,
+            "pages": [(self._documents.index(document), document)
+                      for document in page_documents],
+            "source_undo_depth": len(source_document.undo_stack),
+            "page_undo_depths": [len(document.undo_stack) for document in page_documents],
+        })
+
+    def push_undo(self, previous):
+        active_document = self.document
+        self._multi_tab_redo = [group for group in self._multi_tab_redo
+                                if not self._document_is_in(
+                                    [group["source"], *(page for _, page in group["pages"])],
+                                    active_document)]
+        super().push_undo(previous)
+
+    def _multi_tab_history_group(self, redo):
+        history = self._multi_tab_redo if redo else self._multi_tab_undo
+        if not history:
+            return None
+        group = history[-1]
+        source = group["source"]
+        pages = [page for _, page in group["pages"]]
+        documents = [source, *pages]
+        if not self._document_is_in(documents, self.document):
+            return None
+        if not self._document_is_in(self._documents, source):
+            return None
+        if redo:
+            if len(source.redo_stack) != group.get("source_redo_depth"):
+                return None
+            if any(self._document_is_in(self._documents, page)
+                   or len(page.redo_stack) != depth
+                   for (_, page), depth in zip(group["pages"], group["page_redo_depths"])):
+                return None
+        else:
+            if len(source.undo_stack) != group["source_undo_depth"]:
+                return None
+            if any(not self._document_is_in(self._documents, page)
+                   or len(page.undo_stack) != depth
+                   for (_, page), depth in zip(group["pages"], group["page_undo_depths"])):
+                return None
+        return group
+
+    def _apply_multi_tab_history(self, redo):
+        group = self._multi_tab_history_group(redo)
+        if group is None:
+            return False
+        if getattr(self.canvas, "_nudge_before", None) is not None:
+            self.canvas.finish_nudge()
+        if redo:
+            group["source"].redo()
+            for index, page in group["pages"]:
+                page.redo()
+                self._documents.insert(min(index, len(self._documents)), page)
+            self._multi_tab_redo.pop()
+            self._multi_tab_undo.append(group)
+            group["source_undo_depth"] = len(group["source"].undo_stack)
+            group["page_undo_depths"] = [len(page.undo_stack) for _, page in group["pages"]]
+        else:
+            group["source"].undo()
+            for _, page in reversed(group["pages"]):
+                page.undo()
+            self._documents = [document for document in self._documents
+                               if not self._document_is_in(
+                                   [page for _, page in group["pages"]], document)]
+            self._multi_tab_undo.pop()
+            self._multi_tab_redo.append(group)
+            group["source_redo_depth"] = len(group["source"].redo_stack)
+            group["page_redo_depths"] = [len(page.redo_stack) for _, page in group["pages"]]
+        self._active_document = next(index for index, document in enumerate(self._documents)
+                                     if document is group["source"])
+        self._restore_tab_state(group["source"])
+        self._refresh_tab_titles()
+        self._refresh_history_actions()
+        return True
+
+    def undo(self):
+        if not self._apply_multi_tab_history(False):
+            super().undo()
+
+    def redo(self):
+        if not self._apply_multi_tab_history(True):
+            super().redo()
 
     def canvas_context_menu(self) -> QMenu:
         menu = QMenu(self.canvas)
@@ -2315,33 +2428,35 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
             return
         try:
             updated = dialog.text_parameters()
-            transform = text_transform(item["text_source_contours"], item["contours"])
-            source_path = render_text_path(updated, tuple(data["origin_mm"]))
-            source_contours = _flatten(source_path)
-            outlines = transform_text_contours(source_contours, transform)
-            if not outlines:
-                raise ValueError(tr("文字必須包含可顯示的字元。"))
+            parameters = {key: updated[key] for key in (
+                "content", "font_family", "font_style", "height_mm", "letter_spacing_mm",
+                "line_spacing_mm", "alignment") if key in updated}
+            parameters["text"] = parameters.pop("content")
+            self._execute_registered_command("text.edit", [index], parameters)
         except (KeyError, ValueError) as error:
             QMessageBox.warning(self, tr("無法編輯文字"), str(error))
-            return
-        before = self._snapshot()
-        item["text_data"] = updated
-        item["text_source_contours"] = source_contours
-        item["contours"] = outlines
-        if self._snapshot() != before:
-            self.push_undo(before)
-            self.refresh_all()
 
     def convert_selected_text_to_outlines(self) -> None:
         indices = [i for i in self.selected_indices() if "text_data" in self.items[i]]
         if not indices or self._selection_blocked():
             return
-        before = self._snapshot()
-        for index in indices:
-            self.items[index].pop("text_data", None)
-            self.items[index].pop("text_source_contours", None)
-        self.push_undo(before)
-        self.refresh_all()
+        try:
+            self._execute_registered_command("text.outline", indices, {})
+        except ValueError as error:
+            QMessageBox.warning(self, tr("無法編輯文字"), str(error))
+
+    def data_merge_selected(self) -> None:
+        indices = sorted(self.selected_indices())
+        if not indices or self._selection_blocked():
+            return
+        from .data_merge import DataMergeDialog
+        dialog = DataMergeDialog(self.items, indices, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            self._execute_registered_command("data.merge", indices, dialog.parameters())
+        except (KeyError, ValueError) as error:
+            QMessageBox.warning(self, tr("資料組批次產生"), str(error))
 
     def import_svg(self) -> None:
         filename, _ = QFileDialog.getOpenFileName(self, tr("匯入 SVG"), "", tr("SVG 向量圖 (*.svg)"))

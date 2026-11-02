@@ -359,6 +359,8 @@ class EditorBridge(QObject):
         if plan is None or plan["revision"] != expected_revision:
             raise ValueError("Unknown, expired or stale preview plan.")
         window = self.window
+        source_document = window.document
+        source_tab = window._active_document
         before = window._snapshot()
         window.items = plan["items"]
         window.metadata = plan["metadata"]
@@ -367,6 +369,7 @@ class EditorBridge(QObject):
         window.select_many(plan["selection"])
         window.push_undo(before)
         window.refresh_all()
+        page_documents = []
         for page in plan.get("new_pages", []):
             window.new_design()
             window.metadata = copy.deepcopy(page["metadata"])
@@ -377,6 +380,10 @@ class EditorBridge(QObject):
             window.select_many(page["selection"])
             window.push_undo(before_page)
             window.refresh_all()
+            page_documents.append(window.document)
+        if page_documents:
+            window.tab_bar.setCurrentIndex(source_tab)
+            window._register_multi_tab_operation(source_document, page_documents)
         self._discard_plan(plan_id)
         return self.state()
 

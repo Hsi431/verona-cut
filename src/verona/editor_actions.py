@@ -7,7 +7,22 @@ from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath, QPen, QPolygon
 from .artwork import bounds_list, contour_path, draw_printed_item, item_bounds, validate_bleed
 from .layers import cuttable, editable, printable
 from .grouping import expand_selection, group_items, remap_group_ids, selection_units, ungroup_items
-from .geometry import copy_items as _copy_items, transform_item as _transform_item
+from .geometry import (copy_items as _copy_items, flatten_path as _flatten,
+                       transform_item as _transform_item)
+from .i18n import tr
+
+
+EDIT_ACTION_PARAMETERS = {
+    "transform": {"dx_mm", "dy_mm", "scale", "rotation_deg", "mirror_x", "mirror_y"},
+    "duplicate": {"dx_mm", "dy_mm"}, "delete": set(), "set_cut": {"enabled"},
+    "group": set(), "ungroup": set(), "layer_order": {"direction"},
+    "smooth": {"tolerance_mm"}, "align": {"mode"}, "link_cut": {"contour_indices"},
+    "boolean": {"mode"}, "fill_area": {"gap_mm", "margin_mm", "max_copies", "allow_rotate"},
+    "bleed": {"width_mm", "color", "inner_mm", "mode"},
+    "edit_text": {"text", "font_size_mm", "font_family", "font_style", "height_mm",
+                   "letter_spacing_mm", "line_spacing_mm", "alignment"},
+    "outline_text": set(),
+}
 
 
 def cutting_frame(metadata):
@@ -69,19 +84,8 @@ def finite_number(value, name, low, high):
 
 
 def build_edit(items, metadata, indices, action, parameters):
-    allowed = {
-        "transform": {"dx_mm", "dy_mm", "scale", "rotation_deg", "mirror_x", "mirror_y"},
-        "duplicate": {"dx_mm", "dy_mm"},
-        "delete": set(), "set_cut": {"enabled"}, "group": set(), "ungroup": set(),
-        "layer_order": {"direction"},
-        "smooth": {"tolerance_mm"},
-        "align": {"mode"},
-        "link_cut": {"contour_indices"},
-        "boolean": {"mode"},
-        "fill_area": {"gap_mm", "margin_mm", "max_copies", "allow_rotate"},
-        "bleed": {"width_mm", "color", "inner_mm", "mode"},
-    }
-    if action not in allowed or not isinstance(parameters, dict) or set(parameters) - allowed[action]:
+    if (action not in EDIT_ACTION_PARAMETERS or not isinstance(parameters, dict)
+            or set(parameters) - EDIT_ACTION_PARAMETERS[action]):
         raise ValueError("Unknown edit action or parameters.")
     selected = (boolean_indices(items, indices) if action == "boolean"
                 else editable_indices(items, indices))
@@ -98,7 +102,66 @@ def build_edit(items, metadata, indices, action, parameters):
     for index in selected[1:]:
         bounds = bounds.united(item_bounds(items[index], printed=action == "fill_area"))
 
-    if action == "fill_area":
+    if action == "edit_text":
+        if len(selected) != 1:
+            raise ValueError(tr("請選擇一個可編輯文字物件。"))
+        index = selected[0]
+        item = result[index]
+        old_data = item.get("text_data")
+        if (not isinstance(old_data, dict) or not isinstance(item.get("text_source_contours"), list)
+                or "image_data" in item):
+            raise ValueError(tr("所選物件不是可編輯文字。"))
+        from .text_tool import (make_text_data, render_legacy_text, render_text_path,
+                                text_transform, transform_text_contours)
+        content = parameters.get("text", old_data.get("content"))
+        if not isinstance(content, str) or not content.strip() or len(content) > 1024:
+            raise ValueError(tr("文字必須包含 1–1024 個字元且不能只有空白。"))
+        family = parameters.get("font_family", old_data.get("font_family"))
+        style = parameters.get("font_style", old_data.get("font_style", ""))
+        if not isinstance(family, str) or not family.strip() or len(family) > 256:
+            raise ValueError(tr("請從已安裝字型中選擇字型。"))
+        if not isinstance(style, str) or len(style) > 256:
+            raise ValueError(tr("請選擇字型樣式。"))
+        spacing = finite_number(parameters.get("letter_spacing_mm", old_data.get("letter_spacing_mm", 0)),
+                                "letter_spacing_mm", -5, 50)
+        transform = text_transform(item["text_source_contours"], item["contours"])
+        if "font_size_mm" in parameters and "height_mm" not in parameters:
+            size = finite_number(parameters["font_size_mm"], "font_size_mm", .1, 100)
+            source_path, data, _resolved = render_legacy_text(
+                content, family, size, *old_data.get("origin_mm", (0, 0)),
+                style=style, letter_spacing_mm=spacing)
+        else:
+            height = finite_number(parameters.get("height_mm", old_data.get("height_mm")),
+                                   "height_mm", .1, 100)
+            line_spacing = finite_number(parameters.get(
+                "line_spacing_mm", old_data.get("line_spacing_mm", height * 1.2)),
+                "line_spacing_mm", 0, 300)
+            alignment = parameters.get("alignment", old_data.get("alignment", "left"))
+            if alignment not in ("left", "center", "right"):
+                raise ValueError(tr("文字對齊必須是 left、center 或 right。"))
+            data = make_text_data(content, family, style, height, spacing, line_spacing,
+                                  alignment, tuple(old_data.get("origin_mm", (0, 0))))
+            source_path = render_text_path(data)
+        source_contours = _flatten(source_path)
+        outlines = transform_text_contours(source_contours, transform)
+        if not outlines:
+            raise ValueError(tr("文字必須包含可顯示的字元。"))
+        item["text_data"] = data
+        item["text_source_contours"] = source_contours
+        item["contours"] = outlines
+        details.update(text_index=index, content_length=len(content),
+                       cut_geometry_changed=outlines != items[index]["contours"])
+        selected = [index]
+    elif action == "outline_text":
+        text_indices = [index for index in selected if "text_data" in result[index]]
+        if not text_indices:
+            raise ValueError(tr("請選擇可編輯文字物件再轉成輪廓。"))
+        for index in text_indices:
+            result[index].pop("text_data", None)
+            result[index].pop("text_source_contours", None)
+        details["outlined_objects"] = len(text_indices)
+        selected = text_indices
+    elif action == "fill_area":
         if type(parameters.get("allow_rotate", False)) is not bool:
             raise ValueError("allow_rotate must be a boolean.")
         if parameters.get("allow_rotate"):

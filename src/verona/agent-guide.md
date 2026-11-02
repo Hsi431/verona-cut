@@ -113,6 +113,47 @@ The batch adds editable text at index 3, duplicates it at index 4, then welds
 the two outlines. Recalculate those indices from the current object count for
 other documents. Review the preview before applying.
 
+### Merge a list into labels
+
+Select the template object or group. Put fields in editable text as
+`{name}` or `No.{number}`. `text.edit` changes an existing text object while
+keeping its transform; `text.outline` removes its editable text metadata and is
+undoable. Both commands use the same detached edit actions as the GUI.
+
+Pass either rows (objects keyed by field name) or `csv_text` (UTF-8 CSV or
+tab-separated pasted text with a header row). The template stays in the
+document; each record adds one copy. Multi-object copies stay together as a
+layout unit. Compact layout is on by default, and overflow opens new tabs so
+records are not silently dropped. Turning it off leaves copies at the template
+position. A missing field, empty substituted value, or unsupported glyph names
+the affected row and field and prevents the preview plan from being created.
+
+Example: turn a selected name-and-number label into a sheet of three labels,
+then inspect the proposed layout before applying it:
+
+```json
+{
+  "steps": [
+    {"command_id": "data.merge", "object_indices": [3, 4],
+     "parameters": {
+       "rows": [
+         {"name": "王小明", "number": "001"},
+         {"name": "陳怡君", "number": "002"},
+         {"name": "林大偉", "number": "003"}
+       ],
+       "auto_pack": true,
+       "gap_mm": 2,
+       "new_page_for_unplaced": true
+     }}
+  ]
+}
+```
+
+Send the steps to `verona_command_batch_preview` using the current revision.
+Inspect the returned row count, layout details and plan image with
+`verona_editor_image(editor_id, plan_id)`. Apply that same plan ID only after
+the label text and page layout look right; the batch is one undo step.
+
 ### Fill the cutting area
 
 verona_fill_area repeats the explicit selected pattern in a rectangular grid.

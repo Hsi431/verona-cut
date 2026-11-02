@@ -165,13 +165,42 @@ COMMANDS = (
         _parameter("alignment", "string", "多行文字對齊", choices=("left", "center", "right")),
         _STRING("name", "物件名稱")],
      "selection": (0, None), "kind": "any"},
+    {"id": "text.edit", "label_zh": "編輯文字…", "label_en": "Edit text…", "menu": ["編輯"],
+     "shortcut": "", "action": "edit_text", "parameters": [_STRING("text", "文字內容，1–1024 字元"),
+        _NUMBER("font_size_mm", "字級（mm）", .1, 100), _STRING("font_family", "字型家族"),
+        _STRING("font_style", "字型樣式"), _NUMBER("height_mm", "可見字高（mm）", .1, 100),
+        _NUMBER("letter_spacing_mm", "字距（mm）", -5, 50),
+        _NUMBER("line_spacing_mm", "行距（基線距離，需提供 height_mm）", 0, 300),
+        _parameter("alignment", "string", "多行文字對齊", choices=("left", "center", "right"))],
+     "selection": (1, 1), "kind": "text"},
+    {"id": "text.outline", "label_zh": "轉成輪廓", "label_en": "Convert to outlines",
+     "menu": ["編輯"], "shortcut": "Ctrl+Shift+O", "action": "outline_text",
+     "parameters": [], "selection": (1, None), "kind": "text"},
+    {"id": "data.merge", "label_zh": "資料組批次產生…", "label_en": "Generate Data Merges…",
+     "menu": ["插入"], "shortcut": "", "action": "data_merge",
+     "parameters": [_parameter("rows", "object[]", "每列為欄位名稱對應值的物件"),
+        _STRING("csv_text", "UTF-8 CSV 或貼上的逗號／定位文字"),
+        _BOOLEAN("auto_pack", "使用省紙排版"),
+        _NUMBER("gap_mm", "物件間距（mm）", 0, 300),
+        _NUMBER("margin_mm", "工作區留邊（mm）", 0, 150),
+        _BOOLEAN("allow_rotate", "允許旋轉"), _BOOLEAN("shape_aware", "依輪廓排版"),
+        _BOOLEAN("fill", "填滿剩餘範圍"),
+        _parameter("rotation_step_deg", "integer", "輪廓旋轉角度間隔", 5, 90),
+        _NUMBER("time_limit_seconds", "搜尋時間上限（秒）", .05, 60),
+        _BOOLEAN("new_page_for_unplaced", "放不下的份數開新分頁")],
+     "selection": (1, None), "kind": "editable"},
     {"id": "image.retrace", "label_zh": "重新描圖", "label_en": "Retrace Image",
      "menu": ["圖片"], "shortcut": "", "action": "retrace_image",
      "parameters": [_parameter("mask_mode", "string", "遮罩來源", choices=("saved", "alpha", "background", "colors")),
+                    _STRING("background", "背景色 #RRGGBB"), _BOOLEAN("inverted", "反轉遮罩"),
+                    _BOOLEAN("keep_holes", "保留內孔"),
                     _parameter("tolerance", "integer", "色彩容差", 0, 255),
                     _parameter("smoothing", "integer", "平滑程度", 0, 100),
+                    _NUMBER("cut_smoothing_mm", "切線平滑量（mm）", 0, .5),
                     _NUMBER("minimum_area_mm2", "最小區域面積（mm²）", 0, 1000),
                     _NUMBER("offset_mm", "輪廓偏移（mm）", -5, 5),
+                    _BOOLEAN("clip", "裁切到圖片範圍"),
+                    _parameter("colors", "object[]", "指定描圖顏色"),
                     _parameter("brush_strokes", "object[]", "包含 mode、width_mm、points_mm 的筆刷描線")],
      "selection": (1, 1), "kind": "image"},
     {"id": "document.configure", "label_zh": "設定紙張與文件…", "label_en": "Configure Paper and Document…",
@@ -187,7 +216,8 @@ COMMANDS = (
                     _parameter("tracing", "object", "點陣描圖參數"),
                     _parameter("representation", "string", "匯入表示法", choices=("vector", "raster")),
                     _parameter("page", "integer", "PDF 頁碼", 1),
-                    _parameter("dpi", "integer", "點陣解析度", 75, 600)],
+                    _parameter("dpi", "integer", "點陣解析度", 75, 600),
+                    _NUMBER("tolerance_mm", "SVG 曲線取樣精度（mm）", .005, 1)],
      "selection": (0, None), "kind": "any"},
 )
 
@@ -220,8 +250,6 @@ MENU_EXCLUSIONS = {
     "edit.redo": "History is exposed by verona_editor_history.",
     "edit.deselect": "Changes only the GUI selection; MCP uses verona_editor_select.",
     "edit.edit_mask": "Opens an interactive mask editor; retrace_image accepts explicit parameters.",
-    "edit.edit_text": "Opens an interactive text dialog; text.add creates editable text from parameters.",
-    "edit.outline_text": "Converts existing text metadata in place; no detached action currently supports it.",
     "edit.select_all": "Changes only the GUI selection; MCP uses verona_editor_select.",
     "view.zoom_in": "Changes only the viewport.",
     "view.zoom_out": "Changes only the viewport.",
@@ -254,6 +282,8 @@ MENU_ACTION_IDS = {
     "arrange.pack": "arrange.pack", "path.optimize": "path.optimize",
     "shape.add_rectangle": "shape.add_rectangle", "shape.add_ellipse": "shape.add_ellipse",
     "text.add": "text.add",
+    "text.edit": "text.edit", "text.outline": "text.outline",
+    "data.merge": "data.merge",
 }
 
 
@@ -318,6 +348,18 @@ def command_availability(items, command_id, object_indices):
         if not any(items[index].get("cut", True) and items[index].get("contours") for index in indices):
             return False, "Choose objects with cut contours."
         return True, ""
+    if kind == "text":
+        try:
+            indices = editable_indices(items, object_indices)
+        except ValueError as error:
+            return False, str(error)
+        minimum, maximum = command["selection"]
+        text_indices = [index for index in indices if "text_data" in items[index]]
+        if (len(indices) < minimum or maximum is not None and len(indices) > maximum
+                or not text_indices
+                or command_id == "text.edit" and len(indices) != 1):
+            return False, "請選擇可編輯文字物件。"
+        return True, ""
     if kind == "vector":
         try:
             indices = editable_indices(items, object_indices)
@@ -370,6 +412,7 @@ def command_list(items, object_indices=None, filter_text=None):
                                                       "ungroup": "a grouped editable object",
                                                       "align": "two objects, or three for distribution",
                                                       "smooth": "editable objects with cut contours",
+                                                      "text": "editable text objects",
                                                       "any": "no object selection is required"}[command["kind"]],
                                      "accepts_images": command["kind"] in (
                                          "image", "link_cut", "editable", "smooth", "group", "ungroup", "align"),

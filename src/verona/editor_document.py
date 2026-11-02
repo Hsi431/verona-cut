@@ -5,12 +5,37 @@ from pathlib import Path
 from PySide6.QtCore import QRectF
 from PySide6.QtGui import QImageReader, QPainterPath, QTransform
 
-from .editor_actions import build_edit, cutting_frame, finite_number
+from .editor_actions import EDIT_ACTION_PARAMETERS, build_edit, cutting_frame, finite_number
 from .geometry import copy_items as _copy_items, flatten_path as _flatten, transform_item as _transform_item
+from .data_merge import DATA_MERGE_PARAMETER_NAMES
+from .packing import PACKING_PARAMETER_NAMES
+from .raster_import import TRACE_KEYS
+
+
+DOCUMENT_ACTION_PARAMETERS = {
+    "vector_print": {"fill", "stroke", "width_mm"},
+    "edit_path": {"contour_index", "path"},
+    "path_order": {"enabled"},
+    "pack_objects": PACKING_PARAMETER_NAMES,
+    "retrace_image": TRACE_KEYS | {"brush_strokes"},
+    "import_artwork": {"path", "x_mm", "y_mm", "tracing", "tolerance_mm",
+                        "representation", "page", "dpi"},
+    "configure": {"registration", "cut_settings"},
+    "add_shape": {"shape", "x_mm", "y_mm", "width_mm", "height_mm", "name"},
+    "add_text": {"text", "x_mm", "y_mm", "font_size_mm", "font_family", "font_style",
+                  "height_mm", "letter_spacing_mm", "line_spacing_mm", "alignment", "name"},
+    "data_merge": DATA_MERGE_PARAMETER_NAMES,
+}
+
+ACTION_PARAMETER_NAMES = {**EDIT_ACTION_PARAMETERS, **DOCUMENT_ACTION_PARAMETERS}
 
 
 def build_document_edit(items, metadata, settings, selection, action, parameters):
     from .layers import editable
+    accepted = DOCUMENT_ACTION_PARAMETERS.get(action)
+    if (accepted is not None
+            and (not isinstance(parameters, dict) or set(parameters) - accepted)):
+        raise ValueError("Unknown edit parameters.")
     if action in ("vector_print", "edit_path", "retrace_image", "pack_objects"):
         if any(not editable(items[i]) for i in selection):
             raise ValueError("Unlock the selected layers before editing them.")
@@ -54,6 +79,10 @@ def build_document_edit(items, metadata, settings, selection, action, parameters
     if action == "pack_objects":
         from .packing import pack_items
         result, selection, details = pack_items(items, metadata, selection, parameters)
+        return result, metadata, settings, selection, details
+    if action == "data_merge":
+        from .data_merge import build_data_merge
+        result, selection, details = build_data_merge(items, metadata, selection, parameters)
         return result, metadata, settings, selection, details
     if action not in ("add_shape", "add_text", "configure", "import_artwork", "retrace_image"):
         result, selection, details = build_edit(items, metadata, selection, action, parameters)
