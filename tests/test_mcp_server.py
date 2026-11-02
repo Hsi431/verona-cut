@@ -210,7 +210,7 @@ class McpProtocolTests(unittest.IsolatedAsyncioTestCase):
         from PySide6.QtGui import QImage
         server = create_server(VeronaController())
         tools = {tool.name: tool for tool in server._tool_manager.list_tools()}
-        self.assertEqual(len(tools), 35)
+        self.assertEqual(len(tools), 38)
         for name in ("verona_ui_screenshot", "verona_ui_inspect", "verona_ui_status"):
             self.assertTrue(tools[name].annotations.read_only_hint)
         screenshot_tool = tools["verona_ui_screenshot"]
@@ -254,7 +254,7 @@ class McpProtocolTests(unittest.IsolatedAsyncioTestCase):
         async with Client(parameters, read_timeout_seconds=10) as client:
             tools = await client.list_tools()
             tools = {tool.name: tool for tool in tools.tools}
-            self.assertEqual(len(tools), 35)
+            self.assertEqual(len(tools), 38)
             self.assertEqual(set(tools), {
                 "verona_capabilities", "verona_operating_guide", "verona_list_editors",
                 "verona_editor_state", "verona_command_list", "verona_command_preview",
