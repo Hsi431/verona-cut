@@ -148,11 +148,15 @@ def apply_print_job_options(printer, options, available_options, paper_width_mm,
     copies = options.get("copies", 1)
     if type(copies) is not int or not 1 <= copies <= 999:
         raise ValueError(tr("列印份數必須介於 1 與 999。"))
-    resolution = options.get("resolution", 300)
-    if type(resolution) is not int or not 72 <= resolution <= 600:
-        raise ValueError(tr("列印解析度必須介於 72 與 600 DPI。"))
+    if "resolution" in options:
+        resolution = options["resolution"]
+        if type(resolution) is not int or not 72 <= resolution <= 2400:
+            raise ValueError(tr("列印解析度必須介於 72 與 2400 DPI。"))
+        printer.setResolution(resolution)
+    else:
+        # Same as the GUI: keep the driver's own high-resolution setting.
+        resolution = printer.resolution()
     printer.setCopyCount(copies)
-    printer.setResolution(resolution)
     printer.setFullPage(True)
     if cups_options:
         apply_job_cups_options(printer, cups_options)

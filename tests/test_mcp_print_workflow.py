@@ -138,8 +138,10 @@ class McpPrintWorkflowTests(unittest.TestCase):
                 patch("verona.transport.send_tcp") as tcp, patch("verona.transport.send_usb") as usb:
             actual = self.controller.print_prepared(summary["print_id"], summary["sha256"], True)
             self.assertEqual(actual["status"], "submitted")
-            submitted_image = submit.call_args.kwargs["rendered_image"]
-            self.assertEqual(submitted_image, image)
+            # The real job uses the GUI's vector renderer on the prepared snapshot.
+            self.assertNotIn("rendered_image", submit.call_args.kwargs)
+            self.assertEqual(submit.call_args.args[1], self.window.items)
+            self.assertEqual(submit.call_args.args[2], self.window.metadata)
             submit.assert_called_once()
             with self.assertRaisesRegex(ValueError, "already attempted"):
                 self.controller.print_prepared(summary["print_id"], summary["sha256"], True)

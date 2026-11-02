@@ -19,6 +19,9 @@ from .editor_client import editor_directory
 from .layers import cuttable, printable
 
 
+PRINT_PREVIEW_DPI = 150
+
+
 def _make_print_printer(printer_name):
     from PySide6.QtPrintSupport import QPrinter, QPrinterInfo
     info = next((candidate for candidate in QPrinterInfo.availablePrinters()
@@ -518,7 +521,7 @@ class EditorBridge(QObject):
         image = render_print_image(items, metadata,
             calibration=metadata.get("source_format") == "calibration",
             color_profile_path=icc_profile_path, rendering_intent=rendering_intent,
-            dpi=applied["resolution"])
+            dpi=PRINT_PREVIEW_DPI)
         preview_path = self.directory / f"{self.editor_id}.{print_id}.print.png"
         write_print_preview_png(preview_path, image)
         revision = self.revision()
@@ -535,6 +538,7 @@ class EditorBridge(QObject):
                 "quality": display_choice_zh(applied["quality"]) if applied["quality"] else "印表機預設",
                 "color": "彩色" if applied["color_mode"] == "color" else "灰階",
                 "copies": applied["copies"], "resolution_dpi": applied["resolution"],
+                "preview_dpi": PRINT_PREVIEW_DPI,
                 "icc_profile_path": icc_profile_path, "rendering_intent": rendering_intent,
                 "registration_marks_enabled": bool(registration.get("enabled")),
                 "registration_bounds_mm": registration_bounds},
@@ -558,14 +562,12 @@ class EditorBridge(QObject):
             raise ValueError("Print SHA-256 does not match the prepared snapshot; nothing was printed.")
         del self.print_jobs[print_id]
         self._guard(prepared["revision"])
-        from PySide6.QtGui import QImage
         from .printing import print_document
-        image = QImage(prepared["preview_png"])
-        if image.isNull():
-            raise OSError("The prepared print preview PNG cannot be read; the print_id was consumed.")
+        # Submit through the same vector page renderer as the GUI print dialog;
+        # the PNG preview is a lower-resolution rendering of that same page.
         print_document(prepared["printer"], prepared["items"], prepared["metadata"],
             calibration=prepared["calibration"], color_profile_path=prepared["color_profile_path"],
-            rendering_intent=prepared["rendering_intent"], rendered_image=image)
+            rendering_intent=prepared["rendering_intent"])
         return {"status": "submitted", "print_id": print_id, "sha256": sha256,
                 "revision": prepared["revision"], "printed": True,
                 "automatic_retry": False, "print_id_consumed": True}
