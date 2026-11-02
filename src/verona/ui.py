@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QSpinBox, QDoubleSpinBox, QSplitter, QToolBar, QToolButton, QVBoxLayout, QWidget, QTabBar, QSizePolicy,
 )
 from .i18n import get_language, set_language, tr
+from .command_registry import COMMANDS_BY_ID, MENU_ACTION_IDS, MENU_EXCLUSIONS, command_availability
 # Keep existing imports working while implementations live in their owning modules.
 from .canvas import CanvasRuler, CanvasScrollArea, DesignCanvas, _qoi_image
 from .design_validation import validate_document, validate_contours
@@ -565,6 +566,7 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         self.post_edit_summary.setWordWrap(True)
         post_edit_layout.addWidget(self.post_edit_summary)
         self.smooth_cutline_button = QPushButton(tr("平滑切割線…"))
+        self.smooth_cutline_button.setProperty("verona_command_id", "path.smooth")
         self.smooth_cutline_button.clicked.connect(self.smooth_selected_cutlines)
         self.smooth_cutline_button.setEnabled(False)
         post_edit_layout.addWidget(self.smooth_cutline_button)
@@ -809,7 +811,10 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         self.cut_section.setSummary(summary)
 
     def _cut_toggled(self, checked: bool) -> None:
-        self.set_layer_property(sorted(self.selected_indices()), "cut", checked)
+        try:
+            self._execute_registered_command("edit.set_cut", parameters={"enabled": checked})
+        except ValueError:
+            return
 
     def _update_connection_mode(self, *_args: Any) -> None:
         wifi = self.connection_mode.currentData() == "wifi"
@@ -1054,84 +1059,104 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         )
 
     def _build_menu(self) -> None:
+        self._registry_actions = {}
         file_menu = self.menuBar().addMenu(tr("檔案"))
         new_action = QAction(tr("新增設計"), self)
+        self._tag_menu_exclusion(new_action, "file.new")
         new_action.setShortcut("Ctrl+N")
         new_action.triggered.connect(self.new_design)
         file_menu.addAction(new_action)
-        for label, shortcut, callback in (
-            (tr("開啟設計…"), "Ctrl+O", self.open_design),
-            (tr("儲存設計…"), "Ctrl+S", self.save_design),
-            (tr("另存設計…"), "Ctrl+Shift+S", lambda: self.save_design(save_as=True)),
-            (tr("匯入 SVG…"), "Ctrl+I", self.import_svg),
-            (tr("匯入圖片…"), "Ctrl+Shift+I", self.import_image),
-            (tr("匯入 PDF／SVG 圖稿…"), "", self.import_document_artwork),
-            (tr("匯出 PLT…"), "Ctrl+E", self.export_plt),
+        for label, shortcut, callback, exclusion_id in (
+            (tr("開啟設計…"), "Ctrl+O", self.open_design, "file.open"),
+            (tr("儲存設計…"), "Ctrl+S", self.save_design, "file.save"),
+            (tr("另存設計…"), "Ctrl+Shift+S", lambda: self.save_design(save_as=True), "file.save_as"),
+            (tr("匯入 SVG…"), "Ctrl+I", self.import_svg, "file.import_svg"),
+            (tr("匯入圖片…"), "Ctrl+Shift+I", self.import_image, "file.import_image"),
+            (tr("匯入 PDF／SVG 圖稿…"), "", self.import_document_artwork, "file.import_document"),
+            (tr("匯出 PLT…"), "Ctrl+E", self.export_plt, "file.export_plt"),
         ):
             action = QAction(label, self)
+            self._tag_menu_exclusion(action, exclusion_id)
             action.setShortcut(shortcut)
             action.triggered.connect(callback)
             file_menu.addAction(action)
         self.native_preview_action = QAction(tr("原廠預覽…"), self)
+        self._tag_menu_exclusion(self.native_preview_action, "file.native_preview")
         self.native_preview_action.triggered.connect(self.show_native_preview)
         file_menu.addAction(self.native_preview_action)
         self.native_preview_action.setEnabled(bool(self.metadata.get("source_preview")))
         print_action = QAction(tr("列印…"), self)
+        self._tag_menu_exclusion(print_action, "file.print")
         print_action.setShortcut("Ctrl+P")
         print_action.triggered.connect(self.print_design)
         file_menu.addAction(print_action)
         print_pdf_action = QAction(tr("匯出列印 PDF…"), self)
+        self._tag_menu_exclusion(print_pdf_action, "file.export_pdf")
         print_pdf_action.triggered.connect(self.export_print_pdf)
         file_menu.addAction(print_pdf_action)
         close_action = QAction(tr("關閉分頁"), self)
+        self._tag_menu_exclusion(close_action, "file.close_tab")
         close_action.setShortcut("Ctrl+W")
         close_action.triggered.connect(lambda: self.close_document(self._active_document))
         file_menu.addAction(close_action)
-        for label, shortcut, step in (("下一個分頁", "Ctrl+Tab", 1),
-                                       ("上一個分頁", "Ctrl+Shift+Tab", -1)):
+        for label, shortcut, step, exclusion_id in (("下一個分頁", "Ctrl+Tab", 1, "file.next_tab"),
+                                       ("上一個分頁", "Ctrl+Shift+Tab", -1, "file.previous_tab")):
             action = QAction(tr(label), self)
+            self._tag_menu_exclusion(action, exclusion_id)
             action.setShortcut(shortcut)
             action.triggered.connect(lambda _checked=False, delta=step:
                                      self.tab_bar.setCurrentIndex((self._active_document + delta) % len(self._documents)))
             file_menu.addAction(action)
         edit_menu = self.menuBar().addMenu(tr("編輯"))
         self.copy_action = QAction(tr("複製所選物件"), self)
+        self._tag_menu_exclusion(self.copy_action, "edit.copy")
         self.copy_action.setShortcut("Ctrl+C")
         self.copy_action.triggered.connect(self.copy_selected)
         edit_menu.addAction(self.copy_action)
         self.cut_action = QAction(tr("剪下所選物件"), self)
+        self._tag_menu_exclusion(self.cut_action, "edit.cut")
         self.cut_action.setShortcut("Ctrl+X")
         self.cut_action.triggered.connect(self.cut_selected)
         edit_menu.addAction(self.cut_action)
         self.paste_action = QAction(tr("貼上物件"), self)
+        self._tag_menu_exclusion(self.paste_action, "edit.paste")
         self.paste_action.setShortcut("Ctrl+V")
         self.paste_action.triggered.connect(self.paste_selected)
         edit_menu.addAction(self.paste_action)
         self.paste_in_place_action = QAction(tr("原位貼上物件"), self)
+        self._tag_menu_exclusion(self.paste_in_place_action, "edit.paste_in_place")
         self.paste_in_place_action.setShortcut("Ctrl+Shift+V")
         self.paste_in_place_action.triggered.connect(lambda: self.paste_selected(in_place=True))
         edit_menu.addAction(self.paste_in_place_action)
         edit_menu.addSeparator()
         self.duplicate_action = QAction(tr("複製物件"), self)
+        self._tag_command_action(self.duplicate_action, "edit.duplicate")
         self.duplicate_action.setShortcut("Ctrl+D")
         self.duplicate_action.triggered.connect(self.duplicate_selected)
         edit_menu.addAction(self.duplicate_action)
         self.delete_action = QAction(tr("刪除物件"), self)
+        self._tag_command_action(self.delete_action, "edit.delete")
         self.delete_action.setShortcuts(["Delete", "Backspace"])
         self.delete_action.triggered.connect(self.delete_selected)
         edit_menu.addAction(self.delete_action)
         edit_menu.addAction(self.undo_action)
+        self._tag_menu_exclusion(self.undo_action, "edit.undo")
         edit_menu.addAction(self.redo_action)
+        self._tag_menu_exclusion(self.redo_action, "edit.redo")
         self.deselect_action = QAction(tr("取消選取"), self)
+        self._tag_menu_exclusion(self.deselect_action, "edit.deselect")
         self.deselect_action.setShortcut("Ctrl+Shift+A")
         self.deselect_action.triggered.connect(lambda: self.select_many([]))
         edit_menu.addAction(self.deselect_action)
         edit_menu.addSeparator()
         boolean_menu = edit_menu.addMenu(tr("路徑運算"))
         self.boolean_actions = {}
-        for mode, label in (("weld", "焊接"), ("subtract", "減去上層"),
-                            ("intersect", "交集"), ("exclude", "排除重疊")):
+        for mode, label, command_id in (("weld", "焊接", "path.weld"),
+                            ("subtract", "減去上層", "path.subtract"),
+                            ("intersect", "交集", "path.intersect"),
+                            ("exclude", "排除重疊", "path.exclude")):
             action = QAction(tr(label), self)
+            self._tag_command_action(action, command_id)
             if mode == "weld":
                 action.setShortcut("Ctrl+Shift+U")
             action.triggered.connect(lambda _checked=False, value=mode: self.boolean_selected(value))
@@ -1139,98 +1164,123 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
             self.boolean_actions[mode] = action
         order_menu = edit_menu.addMenu(tr("排列順序"))
         self.bring_forward_action = QAction(tr("上移一層"), self)
+        self._tag_command_action(self.bring_forward_action, "arrange.bring_forward")
         self.bring_forward_action.setShortcut("Ctrl+]")
         self.bring_forward_action.triggered.connect(lambda: self.move_layers(1))
         order_menu.addAction(self.bring_forward_action)
         self.send_backward_action = QAction(tr("下移一層"), self)
+        self._tag_command_action(self.send_backward_action, "arrange.send_backward")
         self.send_backward_action.setShortcut("Ctrl+[")
         self.send_backward_action.triggered.connect(lambda: self.move_layers(-1))
         order_menu.addAction(self.send_backward_action)
         self.bring_to_front_action = QAction(tr("移至最上層"), self)
+        self._tag_command_action(self.bring_to_front_action, "arrange.bring_to_front")
         self.bring_to_front_action.setShortcut("Ctrl+Shift+]")
         self.bring_to_front_action.triggered.connect(lambda: self.move_layers(2))
         order_menu.addAction(self.bring_to_front_action)
         self.send_to_back_action = QAction(tr("移至最下層"), self)
+        self._tag_command_action(self.send_to_back_action, "arrange.send_to_back")
         self.send_to_back_action.setShortcut("Ctrl+Shift+[")
         self.send_to_back_action.triggered.connect(lambda: self.move_layers(-2))
         order_menu.addAction(self.send_to_back_action)
         self.group_action = QAction(tr("群組"), self)
+        self._tag_command_action(self.group_action, "edit.group")
         self.group_action.setShortcut("Ctrl+G")
         self.group_action.triggered.connect(self.group_selected)
         edit_menu.addAction(self.group_action)
         self.ungroup_action = QAction(tr("解散群組"), self)
+        self._tag_command_action(self.ungroup_action, "edit.ungroup")
         self.ungroup_action.setShortcut("Ctrl+Shift+G")
         self.ungroup_action.triggered.connect(self.ungroup_selected)
         edit_menu.addAction(self.ungroup_action)
         link_cut = QAction(tr("將選取切線附到圖片"), self)
+        self._tag_command_action(link_cut, "path.link_cut")
         link_cut.triggered.connect(self.link_selected_cut_paths)
         edit_menu.addAction(link_cut)
         edit_mask = QAction(tr("編輯圖片遮罩…"), self)
+        self._tag_menu_exclusion(edit_mask, "edit.edit_mask")
         edit_mask.triggered.connect(self.edit_selected_image)
         edit_menu.addAction(edit_mask)
         nodes = QAction(tr("編輯節點與曲線…"), self)
+        self._tag_command_action(nodes, "path.edit")
         nodes.triggered.connect(self.edit_nodes)
         edit_menu.addAction(nodes)
         self.edit_text_action = QAction(tr("編輯文字…"), self)
+        self._tag_menu_exclusion(self.edit_text_action, "edit.edit_text")
         self.edit_text_action.triggered.connect(self.edit_selected_text)
         edit_menu.addAction(self.edit_text_action)
         self.outline_text_action = QAction(tr("轉成輪廓"), self)
+        self._tag_menu_exclusion(self.outline_text_action, "edit.outline_text")
         self.outline_text_action.setShortcut("Ctrl+Shift+O")
         self.outline_text_action.triggered.connect(self.convert_selected_text_to_outlines)
         edit_menu.addAction(self.outline_text_action)
         printed = QAction(tr("設定向量列印…"), self)
+        self._tag_command_action(printed, "print.vector_style")
         printed.triggered.connect(self.edit_vector_print)
         edit_menu.addAction(printed)
         bleed = QAction(tr("設定列印出血…"), self)
+        self._tag_command_action(bleed, "print.bleed")
         bleed.triggered.connect(self.edit_selected_bleed)
         edit_menu.addAction(bleed)
         pack = QAction(tr("自動排版…"), self)
+        self._tag_command_action(pack, "arrange.pack")
         pack.triggered.connect(self.pack_selected)
         edit_menu.addAction(pack)
         self.path_order_action = QAction(tr("自動排序切割路徑（內孔先切）"), self)
+        self._tag_command_action(self.path_order_action, "path.optimize")
         self.path_order_action.setCheckable(True)
         self.path_order_action.setChecked(self.metadata.get("optimize_paths", False))
         self.path_order_action.triggered.connect(self.set_path_order)
         edit_menu.addAction(self.path_order_action)
         self.select_all_action = QAction(tr("全選物件"), self.canvas)
+        self._tag_menu_exclusion(self.select_all_action, "edit.select_all")
         self.select_all_action.setShortcut("Ctrl+A")
         self.select_all_action.setShortcutContext(Qt.ShortcutContext.WidgetShortcut)
         self.select_all_action.triggered.connect(lambda: self.select_many(range(len(self.items))))
         self.canvas.addAction(self.select_all_action)
         edit_menu.addAction(self.select_all_action)
         self.insert_menu = self.menuBar().addMenu(tr("插入"))
-        for label, callback in (("矩形", self.add_rectangle), ("圓形", self.add_ellipse),
-                                ("文字輪廓", self.add_text)):
-            self.insert_menu.addAction(tr(label), callback)
+        for label, callback, command_id in (("矩形", self.add_rectangle, "shape.add_rectangle"),
+                                ("圓形", self.add_ellipse, "shape.add_ellipse"),
+                                ("文字輪廓", self.add_text, "text.add")):
+            action = self.insert_menu.addAction(tr(label), callback)
+            self._tag_command_action(action, command_id)
         appearance_menu = self.menuBar().addMenu(tr("外觀"))
         self.zoom_in_action = QAction(tr("放大"), self)
+        self._tag_menu_exclusion(self.zoom_in_action, "view.zoom_in")
         self.zoom_in_action.setShortcuts(["Ctrl+=", "Ctrl++"])
         self.zoom_in_action.triggered.connect(lambda: self.change_zoom(1.25))
         appearance_menu.addAction(self.zoom_in_action)
         self.zoom_out_action = QAction(tr("縮小"), self)
+        self._tag_menu_exclusion(self.zoom_out_action, "view.zoom_out")
         self.zoom_out_action.setShortcut("Ctrl+-")
         self.zoom_out_action.triggered.connect(lambda: self.change_zoom(0.8))
         appearance_menu.addAction(self.zoom_out_action)
         self.zoom_100_action = QAction(tr("顯示 100%"), self)
+        self._tag_menu_exclusion(self.zoom_100_action, "view.zoom_actual")
         self.zoom_100_action.setShortcut("Ctrl+1")
         self.zoom_100_action.triggered.connect(self.zoom_actual_size)
         appearance_menu.addAction(self.zoom_100_action)
         appearance_menu.addSeparator()
         appearance_menu.addAction(self.fit_height_action)
+        self._tag_menu_exclusion(self.fit_height_action, "view.fit_height")
         appearance_menu.addSeparator()
         self.show_guides_action = QAction(tr("顯示／隱藏參考線"), self)
+        self._tag_menu_exclusion(self.show_guides_action, "view.guides_visible")
         self.show_guides_action.setCheckable(True)
         self.show_guides_action.setChecked(self.settings.value("guides/visible", True, type=bool))
         self.show_guides_action.setShortcut("Ctrl+;")
         self.show_guides_action.triggered.connect(self._set_guides_visible)
         appearance_menu.addAction(self.show_guides_action)
         self.lock_guides_action = QAction(tr("鎖定參考線"), self)
+        self._tag_menu_exclusion(self.lock_guides_action, "view.guides_locked")
         self.lock_guides_action.setCheckable(True)
         self.lock_guides_action.setChecked(self.settings.value("guides/locked", False, type=bool))
         self.lock_guides_action.setShortcut("Alt+Ctrl+;")
         self.lock_guides_action.triggered.connect(self._set_guides_locked)
         appearance_menu.addAction(self.lock_guides_action)
         self.smart_guides_action = QAction(tr("智慧參考線"), self)
+        self._tag_menu_exclusion(self.smart_guides_action, "view.smart_guides")
         self.smart_guides_action.setCheckable(True)
         self.smart_guides_action.setChecked(self.settings.value("guides/smart", True, type=bool))
         self.smart_guides_action.setShortcut("Ctrl+U")
@@ -1238,14 +1288,17 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         self.smart_guides_action.triggered.connect(self._set_smart_guides)
         appearance_menu.addAction(self.smart_guides_action)
         self.clear_guides_action = QAction(tr("清除參考線"), self)
+        self._tag_menu_exclusion(self.clear_guides_action, "view.guides_clear")
         self.clear_guides_action.triggered.connect(self._clear_guides)
         appearance_menu.addAction(self.clear_guides_action)
         appearance_menu.addSeparator()
         theme_group = QActionGroup(self)
         theme_group.setExclusive(True)
         self.theme_actions = {}
-        for name, label in (("light", "淺色"), ("dark", "暗色")):
+        for name, label, exclusion_id in (("light", "淺色", "view.theme_light"),
+                                          ("dark", "暗色", "view.theme_dark")):
             action = QAction(tr(label), self)
+            self._tag_menu_exclusion(action, exclusion_id)
             action.setCheckable(True)
             action.setChecked(self.theme_name == name)
             theme_group.addAction(action)
@@ -1255,8 +1308,10 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         language_menu = self.menuBar().addMenu(tr("語言"))
         group = QActionGroup(self)
         group.setExclusive(True)
-        for code, label in (("en", "English"), ("zh_TW", "繁體中文")):
+        for code, label, exclusion_id in (("en", "English", "language.english"),
+                                          ("zh_TW", "繁體中文", "language.traditional_chinese")):
             action = QAction(tr(label), self)
+            self._tag_menu_exclusion(action, exclusion_id)
             action.setCheckable(True)
             action.setChecked(get_language() == code)
             group.addAction(action)
@@ -1264,12 +1319,58 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
             action.triggered.connect(lambda _checked=False, value=code: self._change_language(value))
         help_menu = self.menuBar().addMenu(tr("說明"))
         self.system_info_action = QAction(tr("系統資訊…"), self)
+        self._tag_menu_exclusion(self.system_info_action, "help.system_info")
         self.system_info_action.triggered.connect(self.show_system_info)
         help_menu.addAction(self.system_info_action)
         self.firmware_action = QAction(tr("韌體更新（實驗功能）…"), self)
+        self._tag_menu_exclusion(self.firmware_action, "help.firmware")
         self.firmware_action.triggered.connect(self.show_firmware_update)
         help_menu.addAction(self.firmware_action)
         self.refresh_properties()
+
+    def _tag_command_action(self, action: QAction, command_id: str) -> None:
+        if command_id not in MENU_ACTION_IDS:
+            raise ValueError(f"Menu command is not registered for menus: {command_id}")
+        command = COMMANDS_BY_ID[command_id]
+        action.setData(command_id)
+        action.setText(tr(command["label_zh"]))
+        if command["shortcut"]:
+            action.setShortcut(command["shortcut"])
+        self._registry_actions.setdefault(command_id, []).append(action)
+
+    @staticmethod
+    def _tag_menu_exclusion(action: QAction, exclusion_id: str) -> None:
+        if exclusion_id not in MENU_EXCLUSIONS:
+            raise ValueError(f"Menu exclusion is not documented: {exclusion_id}")
+        action.setData(exclusion_id)
+
+    def _execute_registered_command(self, command_id: str, object_indices=None, parameters=None):
+        from .command_registry import command_availability, command_for_step
+        from .editor_document import build_document_edit
+        indices = sorted(self.selected_indices()) if object_indices is None else object_indices
+        parameters = {} if parameters is None else parameters
+        enabled, reason = command_availability(self.items, command_id, indices)
+        if not enabled:
+            raise ValueError(reason)
+        action, resolved = command_for_step(command_id, parameters)
+        selection = sorted(self.selected_indices()) if action in ("configure", "path_order") else indices
+        before_count = len(self.items)
+        items, metadata, settings, selected, details = build_document_edit(
+            self.items, self.metadata, self._cut_settings(), selection, action, resolved)
+        if command_id == "edit.duplicate":
+            from .i18n import tr
+            for item in items[before_count:]:
+                item["name"] = tr("{name} 複本", name=item.get("name", "路徑"))
+        changed = (items != self.items or metadata != self.metadata or settings != self._cut_settings())
+        if changed:
+            before = self._snapshot()
+            self.items, self.metadata = items, metadata
+            self._set_cut_settings(settings)
+            self.selected, self.selection = -1, set()
+            self.select_many(selected)
+            self.push_undo(before)
+            self.refresh_all()
+        return details
 
     def canvas_context_menu(self) -> QMenu:
         menu = QMenu(self.canvas)
@@ -1469,30 +1570,16 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
             self.refresh_all()
 
     def move_layers(self, direction):
-        selected = self.selected_indices()
-        if not selected or self._selection_blocked():
+        if not self.selected_indices() or self._selection_blocked():
             return
-        order = list(range(len(self.items)))
-        if direction > 1:
-            order = [index for index in order if index not in selected] + [
-                index for index in order if index in selected]
-        elif direction < -1:
-            order = [index for index in order if index in selected] + [
-                index for index in order if index not in selected]
-        else:
-            positions = range(len(order) - 2, -1, -1) if direction > 0 else range(1, len(order))
-            for position in positions:
-                neighbor = position + (1 if direction > 0 else -1)
-                if order[position] in selected and order[neighbor] not in selected:
-                    order[position], order[neighbor] = order[neighbor], order[position]
-        if order == list(range(len(self.items))):
+        command_id = {1: "arrange.bring_forward", -1: "arrange.send_backward",
+                      2: "arrange.bring_to_front", -2: "arrange.send_to_back"}.get(direction)
+        if command_id is None:
             return
-        before = self._snapshot()
-        self.items = [self.items[index] for index in order]
-        self.selection = {new for new, old in enumerate(order) if old in selected}
-        self.selected = max(self.selection)
-        self.push_undo(before)
-        self.refresh_all()
+        try:
+            self._execute_registered_command(command_id)
+        except ValueError:
+            return
 
     def select(self, index: int) -> None:
         self.select_many([index] if index >= 0 else [])
@@ -1520,37 +1607,29 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
     def group_selected(self) -> None:
         if self._selection_blocked():
             return
-        before = self._snapshot()
-        if group_items(self.items, self.selected_indices()):
-            self.push_undo(before)
-            self.refresh_all()
+        try:
+            self._execute_registered_command("edit.group")
+        except ValueError:
+            return
 
     def boolean_selected(self, mode: str) -> None:
         if self._selection_blocked():
             return
-        from .editor_actions import build_edit
-        before = self._snapshot()
         try:
-            items, selection, details = build_edit(
-                self.items, self.metadata, sorted(self.selected_indices()),
-                "boolean", {"mode": mode})
+            details = self._execute_registered_command(f"path.{mode}")
         except ValueError as error:
             self.status_label.setText(_boolean_ui_message(str(error)))
             return
-        self.items = items
-        self.select_many(selection)
-        self.push_undo(before)
-        self.refresh_all()
         self.status_label.setText(tr("路徑運算完成 · {count} 條輪廓 · 精度 {precision} mm",
                                      count=details["result_contours"], precision=details["precision_mm"]))
 
     def ungroup_selected(self) -> None:
         if self._selection_blocked():
             return
-        before = self._snapshot()
-        if ungroup_items(self.items, self.selected_indices()):
-            self.push_undo(before)
-            self.refresh_all()
+        try:
+            self._execute_registered_command("edit.ungroup")
+        except ValueError:
+            return
 
     def link_selected_cut_paths(self) -> None:
         if self._selection_blocked():
@@ -1616,19 +1695,8 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         try:
             if dialog.exec() != QDialog.DialogCode.Accepted:
                 return
-            changes = {i: contours for i, contours in dialog.build_contours().items()
-                       if contours != self.items[i]["contours"]}
-            if changes:
-                before = self._snapshot()
-                for index, contours in changes.items():
-                    item = dict(self.items[index])
-                    item["contours"] = contours
-                    if "node_paths" in item:
-                        item["node_paths"] = {key: path for key, path in item["node_paths"].items()
-                                              if contours[int(key)] == self.items[index]["contours"][int(key)]}
-                    self.items[index] = item
-                self.push_undo(before)
-                self.refresh_all()
+            self._execute_registered_command("path.smooth", indices,
+                {"tolerance_mm": dialog.tolerance_spin.value()})
         except (ValueError, OSError) as error:
             QMessageBox.warning(self, tr("平滑切割線"), str(error))
         finally:
@@ -1781,22 +1849,14 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
             dialog.deleteLater()
 
     def set_path_order(self, enabled):
-        from .path_order import analyze_path_order
         if enabled == self.metadata.get("optimize_paths", False):
             return
         try:
-            _, details = analyze_path_order(self.items, self.metadata, enabled)
+            details = self._execute_registered_command("path.optimize", parameters={"enabled": enabled})
         except ValueError as error:
             self.refresh_all()
             QMessageBox.warning(self, tr("自動排序切割路徑（內孔先切）"), str(error))
             return
-        before = self._snapshot()
-        if enabled:
-            self.metadata["optimize_paths"] = True
-        else:
-            self.metadata.pop("optimize_paths", None)
-        self.push_undo(before)
-        self.refresh_all()
         self.status_label.setText(tr("估計空走：{before} → {after} mm；不含定位搜尋與實機耗時。",
             before=f"{details['travel_before_mm']:.2f}", after=f"{details['travel_after_mm']:.2f}")
             if enabled else tr("已還原文件切線順序。"))
@@ -1808,20 +1868,10 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
     def align_selected(self, mode: str) -> None:
         if self._selection_blocked():
             return
-        from .alignment import alignment_offsets
-        units = self.selection_units()
-        if len(units) < (3 if mode.startswith("distribute_") else 2):
+        try:
+            self._execute_registered_command(f"align.{mode}")
+        except (KeyError, ValueError):
             return
-        bounds = [self.selection_bounds(unit) for unit in units]
-        offsets = alignment_offsets([(b.left(), b.top(), b.right(), b.bottom()) for b in bounds], mode)
-        if not any(dx or dy for dx, dy in offsets):
-            return
-        before = self._snapshot()
-        for unit, (dx, dy) in zip(units, offsets):
-            for index in unit:
-                _transform_item(self.items[index], QTransform.fromTranslate(dx, dy))
-        self.push_undo(before)
-        self.refresh_all()
 
     def refresh_properties(self) -> None:
         count = len(self.selected_indices())
@@ -1863,6 +1913,12 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
             text_indices = [i for i in self.selected_indices() if "text_data" in self.items[i]]
             self.edit_text_action.setEnabled(enabled and not blocked and self.selected in text_indices)
             self.outline_text_action.setEnabled(bool(text_indices) and not blocked)
+            for command_id, actions in self._registry_actions.items():
+                command_enabled, reason = command_availability(self.items, command_id,
+                                                               sorted(self.selected_indices()))
+                for action in actions:
+                    action.setEnabled(command_enabled)
+                    action.setStatusTip(tr(reason) if reason else "")
         self.object_name.setEnabled(enabled and not blocked)
         for control in (self.width_spin, self.height_spin, self.x_spin, self.y_spin, *self.selection_edit_buttons):
             control.setEnabled(count > 0 and not blocked)
@@ -1884,9 +1940,9 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         image_indices = [i for i in self.selected_indices() if "image_data" in self.items[i]
                          and not self.items[i].get("registration_guide")]
         self.edit_bleed_button.setEnabled(bool(image_indices) and not blocked)
-        self.smooth_cutline_button.setEnabled(not blocked and not self.sending and any(
-            self.items[i].get("cut", True) and self.items[i].get("contours")
-            and not self.items[i].get("registration_guide") for i in self.selected_indices()))
+        smooth_enabled, _ = command_availability(self.items, "path.smooth",
+                                                  sorted(self.selected_indices()))
+        self.smooth_cutline_button.setEnabled(smooth_enabled and not self.sending)
         self.remove_bleed_button.setEnabled(not blocked and any(self.items[i].get("bleed") for i in image_indices))
         self.restore_bleed_button.setEnabled(bool(image_indices) and not blocked)
         self.edit_image_button.setEnabled(count == 1 and len(image_indices) == 1 and not blocked)
@@ -2228,14 +2284,10 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         self.select(len(self.items) - 1)
 
     def add_rectangle(self) -> None:
-        path = QPainterPath()
-        path.addRect(QRectF(0, 0, 40, 25))
-        self._add_path(tr("矩形"), path)
+        self._execute_registered_command("shape.add_rectangle", parameters={"name": tr("矩形")})
 
     def add_ellipse(self) -> None:
-        path = QPainterPath()
-        path.addEllipse(QRectF(0, 0, 30, 30))
-        self._add_path(tr("圓形"), path)
+        self._execute_registered_command("shape.add_ellipse", parameters={"name": tr("圓形")})
 
     def add_text(self) -> None:
         dialog = TextLayoutDialog(parent=self)
@@ -2518,53 +2570,28 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
     def duplicate_selected(self) -> None:
         if self._selection_blocked():
             return
-        indices = sorted(self.selected_indices())
-        if not indices:
+        try:
+            self._execute_registered_command("edit.duplicate")
+        except ValueError:
             return
-        before = self._snapshot()
-        copies = _copy_items([self.items[i] for i in indices])
-        remap_group_ids(copies)
-        start = len(self.items)
-        for source in copies:
-            _transform_item(source, QTransform.fromTranslate(5, 5))
-            source["name"] = tr("{name} 複本", name=_display_name(source.get("name", "路徑")))
-        self.items.extend(copies)
-        self.push_undo(before)
-        self.select_many(range(start, len(self.items)))
 
     def delete_selected(self) -> None:
         if self._selection_blocked():
             return
-        indices = self.selected_indices()
-        if not indices:
+        try:
+            self._execute_registered_command("edit.delete")
+        except ValueError:
             return
-        before = self._snapshot()
-        self.items = [item for index, item in enumerate(self.items) if index not in indices]
-        self.selected, self.selection = -1, set()
-        self.push_undo(before)
-        self.refresh_all()
 
     def transform_selected(self, *, mirror_x: bool = False, mirror_y: bool = False,
                            rotation: float = 0) -> None:
         if self._selection_blocked():
             return
-        indices = sorted(self.selected_indices())
-        if not indices:
+        try:
+            self._execute_registered_command("edit.transform", parameters={
+                "mirror_x": mirror_x, "mirror_y": mirror_y, "rotation_deg": rotation})
+        except ValueError:
             return
-        before = self._snapshot()
-        bounds = self.canvas.item_path(self.items[indices[0]]).boundingRect()
-        for index in indices[1:]:
-            bounds = bounds.united(self.canvas.item_path(self.items[index]).boundingRect())
-        center = bounds.center()
-        transform = QTransform()
-        transform.translate(center.x(), center.y())
-        transform.rotate(rotation)
-        transform.scale(-1 if mirror_x else 1, -1 if mirror_y else 1)
-        transform.translate(-center.x(), -center.y())
-        for index in indices:
-            _transform_item(self.items[index], transform)
-        self.push_undo(before)
-        self.refresh_all()
 
     def show_preview(self) -> None:
         try:

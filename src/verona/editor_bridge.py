@@ -20,26 +20,29 @@ from .layers import cuttable, printable
 
 
 class EditorBridge(QObject):
-    def __init__(self, window, *, directory=None):
+    def __init__(self, window, *, directory=None, listen=True):
         super().__init__(window)
         self.window = window
         self.directory = Path(directory) if directory else editor_directory(create=True)
         self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.editor_id = f"{os.getpid()}-{uuid.uuid4().hex[:12]}"
         self.socket_path = self.directory / f"{self.editor_id}.sock"
-        self.server = QLocalServer(self)
-        self.server.setSocketOptions(QLocalServer.SocketOption.UserAccessOption)
-        if not self.server.listen(str(self.socket_path)):
-            raise RuntimeError(self.server.errorString())
+        self.server = QLocalServer(self) if listen else None
+        if self.server is not None:
+            self.server.setSocketOptions(QLocalServer.SocketOption.UserAccessOption)
+            if not self.server.listen(str(self.socket_path)):
+                raise RuntimeError(self.server.errorString())
         self.connections = {}
         self.plans = {}
         self._digests = {}
-        self.server.newConnection.connect(self._accept)
+        if self.server is not None:
+            self.server.newConnection.connect(self._accept)
 
     def close(self):
         for connection in list(self.connections):
             connection.abort()
-        self.server.close()
+        if self.server is not None:
+            self.server.close()
         for path in self.directory.glob(f"{self.editor_id}.*"):
             path.unlink(missing_ok=True)
         self.plans.clear()
@@ -214,18 +217,31 @@ class EditorBridge(QObject):
         selection = sorted(window.selected_indices()) if action in ("configure", "path_order") else object_indices
         items, metadata, settings, selection, details = build_document_edit(
             window.items, window.metadata, window._cut_settings(), selection, action, parameters)
+        details, new_pages = self._split_new_pages(details, metadata, settings, window.items)
+        items, metadata, settings = self._validate_detached(items, metadata, settings, window.items)
+        return self._make_plan(expected_revision, items, metadata, settings, selection, details, new_pages)
+
+    def _split_new_pages(self, details, metadata, settings, trusted_items):
+        """Validate overflow pages a packing edit wants to open as new tabs."""
         details = dict(details)
-        new_pages = details.pop("new_pages", [])
-        document = {"format": "verona", "version": 1, "units": "mm",
-                    "items": items, "metadata": metadata, "settings": settings}
-        items, settings = window._validate_document(document, trusted_items=window.items)
         validated_pages = []
-        for page in new_pages:
+        for page in details.pop("new_pages", []):
             page_document = {"format": "verona", "version": 1, "units": "mm",
                              "items": page["items"], "metadata": metadata, "settings": settings}
-            page_items, page_settings = window._validate_document(page_document, trusted_items=window.items)
+            page_items, page_settings = self.window._validate_document(page_document, trusted_items=trusted_items)
             validated_pages.append({"items": page_items, "selection": page["selection"],
                                     "settings": page_settings, "metadata": copy.deepcopy(metadata)})
+        return details, validated_pages
+
+    def _validate_detached(self, items, metadata, settings, trusted_items):
+        document = {"format": "verona", "version": 1, "units": "mm",
+                    "items": items, "metadata": metadata, "settings": settings}
+        items, settings = self.window._validate_document(document, trusted_items=trusted_items)
+        return items, metadata, settings
+
+    def _make_plan(self, expected_revision, items, metadata, settings, selection, details, new_pages=()):
+        window = self.window
+        validated_pages = list(new_pages)
         plan_id = uuid.uuid4().hex
         filename = self.directory / f"{self.editor_id}.{plan_id}.png"
         render_preview(items, metadata, filename)
@@ -241,6 +257,78 @@ class EditorBridge(QObject):
                 "metadata_after": {k: v for k, v in metadata.items() if k != "source_preview"},
                 "settings_after": settings,
                 "preview_path": str(filename), "applied": False, "hardware_operations": False}
+
+    def command_list(self, object_indices=None, filter=None):
+        from .command_registry import command_list
+        if filter is not None and not isinstance(filter, str):
+            raise ValueError("filter must be a string.")
+        if object_indices is not None and (not isinstance(object_indices, list)
+                or any(type(index) is not int or not 0 <= index < len(self.window.items)
+                       for index in object_indices)):
+            raise ValueError("Invalid object indices.")
+        return command_list(self.window.items, object_indices, filter)
+
+    def _build_command_step(self, items, metadata, settings, selection, step):
+        from .command_registry import command_availability, command_for_step
+        if not isinstance(step, dict) or set(step) != {"command_id", "object_indices", "parameters"}:
+            raise ValueError("Each step needs command_id, object_indices and parameters.")
+        command_id = step["command_id"]
+        object_indices = step["object_indices"]
+        if not isinstance(command_id, str):
+            raise ValueError("command_id must be a string.")
+        enabled, reason = command_availability(items, command_id, object_indices)
+        if not enabled:
+            raise ValueError(reason)
+        action, parameters = command_for_step(command_id, step["parameters"])
+        target_selection = selection if action in ("configure", "path_order") else object_indices
+        before_count = len(items)
+        result, metadata, settings, next_selection, details = build_document_edit(
+            items, metadata, settings, target_selection, action, parameters)
+        if command_id == "edit.duplicate":
+            from .i18n import tr
+            for item in result[before_count:]:
+                item["name"] = tr("{name} 複本", name=item.get("name", "路徑"))
+        details, new_pages = self._split_new_pages(details, metadata, settings, items)
+        result, metadata, settings = self._validate_detached(result, metadata, settings, items)
+        details = {"command_id": command_id, **details}
+        return result, metadata, settings, next_selection, details, new_pages
+
+    def command_preview(self, expected_revision, command_id, object_indices, parameters):
+        self._guard(expected_revision)
+        window = self.window
+        step = {"command_id": command_id, "object_indices": object_indices,
+                "parameters": parameters}
+        items, metadata, settings, selection, details, new_pages = self._build_command_step(
+            window.items, window.metadata, window._cut_settings(),
+            sorted(window.selected_indices()), step)
+        return self._make_plan(expected_revision, items, metadata, settings, selection, details, new_pages)
+
+    def command_batch_preview(self, expected_revision, steps):
+        self._guard(expected_revision)
+        if not isinstance(steps, list) or not steps:
+            raise ValueError("steps must be a nonempty list.")
+        if len(steps) > 100:
+            raise ValueError("A command batch can contain at most 100 steps.")
+        window = self.window
+        items = window.items
+        metadata = window.metadata
+        settings = window._cut_settings()
+        selection = sorted(window.selected_indices())
+        step_details = []
+        new_pages = []
+        for number, step in enumerate(steps, 1):
+            try:
+                items, metadata, settings, selection, details, pages = self._build_command_step(
+                    items, metadata, settings, selection, step)
+                new_pages.extend(pages)
+            except (ValueError, TypeError, KeyError, RuntimeError, OSError) as error:
+                command_id = step.get("command_id") if isinstance(step, dict) else None
+                raise ValueError(f"Step {number} ({command_id or 'unknown'}) failed: {error}") from error
+            step_details.append(details)
+        details = {"action": "command_batch", "step_count": len(step_details),
+                   "steps": step_details,
+                   "indexing": "Each step's object_indices refer to the current intermediate item list after all earlier steps."}
+        return self._make_plan(expected_revision, items, metadata, settings, selection, details, new_pages)
 
     def _discard_plan(self, plan_id):
         plan = self.plans.pop(plan_id)
@@ -373,7 +461,9 @@ class EditorBridge(QObject):
         handlers = {"state": self.state, "summary": self.summary, "preview": self.preview, "apply": self.apply,
                     "select": self.select, "history": self.history, "image": self.image,
                     "open_document": self.open_document, "save_document": self.save_document,
-                    "export_pdf": self.export_pdf, "printers": self.printers}
+                    "export_pdf": self.export_pdf, "printers": self.printers,
+                    "command_list": self.command_list, "command_preview": self.command_preview,
+                    "command_batch_preview": self.command_batch_preview}
         if command not in handlers:
             raise ValueError("Unsupported editor command; no device operations are available here.")
         return handlers[command](**arguments)

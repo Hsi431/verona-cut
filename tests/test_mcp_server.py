@@ -225,7 +225,20 @@ class McpProtocolTests(unittest.IsolatedAsyncioTestCase):
         async with Client(parameters, read_timeout_seconds=10) as client:
             tools = await client.list_tools()
             tools = {tool.name: tool for tool in tools.tools}
-            self.assertEqual(len(tools), 29)
+            self.assertEqual(len(tools), 32)
+            self.assertEqual(set(tools), {
+                "verona_capabilities", "verona_operating_guide", "verona_list_editors",
+                "verona_editor_state", "verona_command_list", "verona_command_preview",
+                "verona_command_batch_preview", "verona_list_printers", "verona_editor_image",
+                "verona_preview_edit", "verona_add_shape", "verona_add_text",
+                "verona_configure_document", "verona_import_artwork", "verona_retrace_image",
+                "verona_link_cut_paths", "verona_fill_area", "verona_pack_objects",
+                "verona_set_vector_print", "verona_edit_path", "verona_optimize_paths",
+                "verona_add_bleed", "verona_apply_edit", "verona_editor_select",
+                "verona_editor_history", "verona_editor_open", "verona_editor_save",
+                "verona_editor_export_pdf", "verona_query_version", "verona_list_usb",
+                "verona_prepare_job", "verona_send_job",
+            })
             self.assertTrue(tools["verona_editor_state"].annotations.read_only_hint)
             self.assertFalse(tools["verona_apply_edit"].annotations.destructive_hint)
             self.assertIn("verona_fill_area", tools)

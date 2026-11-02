@@ -73,6 +73,8 @@ def build_edit(items, metadata, indices, action, parameters):
         "transform": {"dx_mm", "dy_mm", "scale", "rotation_deg", "mirror_x", "mirror_y"},
         "duplicate": {"dx_mm", "dy_mm"},
         "delete": set(), "set_cut": {"enabled"}, "group": set(), "ungroup": set(),
+        "layer_order": {"direction"},
+        "smooth": {"tolerance_mm"},
         "align": {"mode"},
         "link_cut": {"contour_indices"},
         "boolean": {"mode"},
@@ -164,12 +166,49 @@ def build_edit(items, metadata, indices, action, parameters):
     elif action == "delete":
         result = [item for i, item in enumerate(result) if i not in selected]
         selected = []
+    elif action == "layer_order":
+        direction = parameters.get("direction")
+        if type(direction) is not int or direction not in (-2, -1, 1, 2):
+            raise ValueError("direction must be -2, -1, 1 or 2.")
+        order = list(range(len(result)))
+        if direction > 1:
+            order = [index for index in order if index not in selected] + [
+                index for index in order if index in selected]
+        elif direction < -1:
+            order = [index for index in order if index in selected] + [
+                index for index in order if index not in selected]
+        else:
+            positions = range(len(order) - 2, -1, -1) if direction > 0 else range(1, len(order))
+            for position in positions:
+                neighbor = position + (1 if direction > 0 else -1)
+                if order[position] in selected and order[neighbor] not in selected:
+                    order[position], order[neighbor] = order[neighbor], order[position]
+        result = [result[index] for index in order]
+        selected = [new for new, old in enumerate(order) if old in selected]
     elif action == "set_cut":
         enabled = parameters.get("enabled")
         if type(enabled) is not bool:
             raise ValueError("enabled must be a boolean.")
         for index in selected:
             result[index]["cut"] = enabled
+    elif action == "smooth":
+        from .contour_smoothing import smooth_contours
+        tolerance = finite_number(parameters.get("tolerance_mm"), "tolerance_mm", 0, .5)
+        changed = []
+        for index in selected:
+            item = result[index]
+            if not item.get("cut", True) or not item.get("contours"):
+                continue
+            contours = smooth_contours(item["contours"], tolerance)
+            if contours == item["contours"]:
+                continue
+            item["contours"] = contours
+            if item.get("node_paths"):
+                item["node_paths"] = {key: path for key, path in item["node_paths"].items()
+                    if contours[int(key)] == items[index]["contours"][int(key)]}
+            changed.append(index)
+        details.update(tolerance_mm=tolerance, changed_indices=changed,
+                       cut_geometry_changed=bool(changed))
     elif action in ("group", "ungroup"):
         operation = group_items if action == "group" else ungroup_items
         if not operation(result, selected):

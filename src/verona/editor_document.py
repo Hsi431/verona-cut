@@ -202,7 +202,7 @@ def build_document_edit(items, metadata, settings, selection, action, parameters
     allowed = ({"shape", "x_mm", "y_mm", "width_mm", "height_mm", "name"}
                if action == "add_shape" else
                {"text", "x_mm", "y_mm", "font_size_mm", "font_family", "font_style",
-                "height_mm", "letter_spacing_mm", "name"})
+                "height_mm", "letter_spacing_mm", "line_spacing_mm", "alignment", "name"})
     if set(parameters) - allowed:
         raise ValueError("Unknown creation parameters.")
     x = finite_number(parameters.get("x_mm", 20), "x_mm", -300, 600)
@@ -230,10 +230,17 @@ def build_document_edit(items, metadata, settings, selection, action, parameters
             raise ValueError("Choose a font style.")
         spacing = finite_number(parameters.get("letter_spacing_mm", 0), "letter_spacing_mm", -5, 50)
         size = finite_number(parameters.get("font_size_mm", 10), "font_size_mm", .1, 100)
+        if "height_mm" not in parameters and any(key in parameters for key in ("line_spacing_mm", "alignment")):
+            raise ValueError("line_spacing_mm and alignment require height_mm.")
         if "height_mm" in parameters:
             height = finite_number(parameters["height_mm"], "height_mm", .1, 100)
-            data = make_text_data(text, family, style, height, spacing, height * 1.2,
-                                  "left", (x, y))
+            line_spacing = finite_number(parameters.get("line_spacing_mm", height * 1.2),
+                                         "line_spacing_mm", 0, 300)
+            alignment = parameters.get("alignment", "left")
+            if alignment not in ("left", "center", "right"):
+                raise ValueError("alignment must be left, center or right.")
+            data = make_text_data(text, family, style, height, spacing, line_spacing,
+                                  alignment, (x, y))
             path = render_text_path(data)
         else:
             path, data, resolved = render_legacy_text(text, family, size, x, y,

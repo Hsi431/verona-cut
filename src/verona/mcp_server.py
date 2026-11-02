@@ -146,6 +146,7 @@ def create_server(controller):
         "Preview edits, inspect the returned image and bounds, then apply the exact plan with "
         "its expected revision. Edits are undoable and never send machine commands."))
     readonly = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True)
+    preview_annotation = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False)
 
     def invoke(function, *args):
         try:
@@ -181,6 +182,39 @@ def create_server(controller):
                       {"object_indices": object_indices, "include_geometry": include_geometry})
 
     @server.tool(annotations=readonly)
+    def verona_command_list(editor_id: str, filter: str | None = None,
+                            object_indices: list[StrictInt] | None = None) -> list[dict[str, Any]]:
+        """List registered editable commands and availability for explicit current object indices.
+
+        Omitted object_indices means an empty selection. Results include bilingual labels,
+        menu path, shortcut, typed parameter descriptions, selection constraints, and a
+        disabled_reason when the command cannot act on these objects.
+        """
+        return invoke(editor_request, editor_id, "command_list",
+                      {"filter": filter, "object_indices": object_indices})
+
+    @server.tool(annotations=preview_annotation)
+    def verona_command_preview(editor_id: str, expected_revision: str, command_id: str,
+                               object_indices: list[StrictInt], parameters: dict[str, Any]) -> dict[str, Any]:
+        """Preview one registered command on detached document data; apply its plan with verona_apply_edit."""
+        return invoke(editor_request, editor_id, "command_preview",
+                      {"expected_revision": expected_revision, "command_id": command_id,
+                       "object_indices": object_indices, "parameters": parameters})
+
+    @server.tool(annotations=preview_annotation)
+    def verona_command_batch_preview(editor_id: str, expected_revision: str,
+                                     steps: list[dict[str, Any]]) -> dict[str, Any]:
+        """Preview up to 100 ordered commands as one plan and one undo step.
+
+        Each step has command_id, object_indices and parameters. Indices in a step
+        refer to the current intermediate object list after earlier steps, so a
+        created object can be targeted by its resulting index. Any failed step
+        rejects the whole batch and reports its one-based step number.
+        """
+        return invoke(editor_request, editor_id, "command_batch_preview",
+                      {"expected_revision": expected_revision, "steps": steps})
+
+    @server.tool(annotations=readonly)
     def verona_list_printers(editor_id: str, paper_width_mm: StrictFloat = 210,
                               paper_height_mm: StrictFloat = 297) -> dict[str, Any]:
         """Read installed print queues and driver-reported minimum margins for the requested paper.
@@ -202,8 +236,6 @@ def create_server(controller):
         """
         result = invoke(editor_request, editor_id, "image", {"plan_id": plan_id, "view": view})
         return Image(path=result["path"])
-
-    preview_annotation = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False)
 
     @server.tool(annotations=preview_annotation)
     def verona_preview_edit(editor_id: str, expected_revision: str,

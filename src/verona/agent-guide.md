@@ -66,6 +66,41 @@ The user's request can authorize reversible edits. Do not ask for repeated
 approval when the requested operation and necessary parameters are already
 clear. Ask for a missing material choice rather than inventing it.
 
+### Use the command registry
+
+Call `verona_command_list(editor_id, object_indices=[...])` to inspect stable
+command IDs, bilingual labels, menu paths, shortcuts, parameter types/ranges,
+selection rules and availability for those exact current indices. An omitted
+selection means `[]`; command availability never reads the GUI's current
+selection. Image-only commands reject vectors, path booleans reject images, and
+locked or registration-guide objects are disabled with a reason.
+
+Use `verona_command_preview` for one command or
+`verona_command_batch_preview` for an ordered list, then inspect the returned
+details and image and call `verona_apply_edit` with the original revision and
+plan ID. A batch is one plan and one undo step. Each step's object indices refer
+to the intermediate object list after earlier steps. A creation command appends
+objects; its new index is the previous object count. A duplicate appends another
+object. If any step fails, no plan is created and the error names its one-based
+step. A stale revision rejects the whole request.
+
+For example, if state reports three current objects, preview this batch:
+
+```json
+{
+  "steps": [
+    {"command_id": "text.add", "object_indices": [],
+     "parameters": {"text": "HELLO", "x_mm": 40, "y_mm": 40}},
+    {"command_id": "edit.duplicate", "object_indices": [3], "parameters": {}},
+    {"command_id": "path.weld", "object_indices": [3, 4], "parameters": {}}
+  ]
+}
+```
+
+The batch adds editable text at index 3, duplicates it at index 4, then welds
+the two outlines. Recalculate those indices from the current object count for
+other documents. Review the preview before applying.
+
 ### Fill the cutting area
 
 verona_fill_area repeats the explicit selected pattern in a rectangular grid.
