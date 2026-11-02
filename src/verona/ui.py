@@ -50,6 +50,13 @@ def _display_name(name: str) -> str:
     return tr(name) if name in {"矩形", "圓形", "文字輪廓", "路徑"} else name
 
 
+_PAPER_SIZES_MM = {
+    "a4": (210., 297.), "a5": (148., 210.), "a6": (105., 148.),
+    "b5": (176., 250.), "letter": (215.9, 279.4),
+    "4x6": (101.6, 152.4), "5x7": (127., 177.8),
+}
+
+
 class TaskSignals(QObject):
     succeeded = Signal(object, object)
     failed = Signal(object, str)
@@ -585,6 +592,40 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         mark_layout.setContentsMargins(0, 4, 0, 4)
         self.mark_section = CollapsibleSection(tr("紙張與定位設定"), mark_content)
         layout.addWidget(self.mark_section)
+        paper_form = QFormLayout()
+        self.paper_size_combo = QComboBox()
+        for key, label in (("a4", "A4 · 210 × 297 mm"), ("a5", "A5 · 148 × 210 mm"),
+                           ("a6", "A6 · 105 × 148 mm"), ("b5", "B5 · 176 × 250 mm"),
+                           ("letter", "Letter · 215.9 × 279.4 mm"),
+                           ("4x6", "4 × 6 in · 101.6 × 152.4 mm"),
+                           ("5x7", "5 × 7 in · 127 × 177.8 mm"), ("custom", "自訂")):
+            self.paper_size_combo.addItem(tr(label), key)
+        self.paper_size_combo.currentIndexChanged.connect(self._paper_size_selection_changed)
+        paper_form.addRow(tr("紙張大小"), self.paper_size_combo)
+        self.paper_orientation_combo = QComboBox()
+        self.paper_orientation_combo.addItem(tr("直向"), "portrait")
+        self.paper_orientation_combo.addItem(tr("橫向"), "landscape")
+        self.paper_orientation_combo.currentIndexChanged.connect(self._paper_orientation_changed)
+        paper_form.addRow(tr("方向"), self.paper_orientation_combo)
+        custom_paper = QWidget()
+        custom_paper_layout = QHBoxLayout(custom_paper)
+        custom_paper_layout.setContentsMargins(0, 0, 0, 0)
+        self.paper_width_spin = self._mm_spin()
+        self.paper_height_spin = self._mm_spin()
+        self.paper_width_spin.setRange(1, 300)
+        self.paper_height_spin.setRange(1, 300)
+        for spin, label in ((self.paper_width_spin, "寬"), (self.paper_height_spin, "高")):
+            custom_paper_layout.addWidget(QLabel(tr(label)))
+            custom_paper_layout.addWidget(spin)
+            spin.valueChanged.connect(self._custom_paper_changed)
+        self.custom_paper_fields = custom_paper
+        paper_form.addRow(tr("自訂尺寸"), custom_paper)
+        mark_layout.addLayout(paper_form)
+        self.paper_warning = QLabel()
+        self.paper_warning.setObjectName("warning")
+        self.paper_warning.setWordWrap(True)
+        self.paper_warning.setTextFormat(Qt.TextFormat.PlainText)
+        mark_layout.addWidget(self.paper_warning)
         mark_layout.addWidget(self.registration_checkbox)
         mark_layout.addWidget(self.registration_info)
         mark_layout.addWidget(QLabel(tr("標記距紙邊")))
@@ -1764,6 +1805,26 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
 
     def _sync_registration_controls(self) -> None:
         registration = self.metadata.get("print_cut", {})
+        width = registration.get("paper_width", 210.)
+        height = registration.get("paper_height", 297.)
+        dimensions = (width, height)
+        preset = next((key for key, size in _PAPER_SIZES_MM.items()
+                       if abs(sorted(dimensions)[0] - sorted(size)[0]) < .05
+                       and abs(sorted(dimensions)[1] - sorted(size)[1]) < .05), "custom")
+        self.paper_size_combo.blockSignals(True)
+        self.paper_size_combo.setCurrentIndex(self.paper_size_combo.findData(preset))
+        self.paper_size_combo.blockSignals(False)
+        orientation = "landscape" if width > height else "portrait"
+        self.paper_orientation_combo.blockSignals(True)
+        self.paper_orientation_combo.setCurrentIndex(self.paper_orientation_combo.findData(orientation))
+        self.paper_orientation_combo.blockSignals(False)
+        for spin, value in ((self.paper_width_spin, width), (self.paper_height_spin, height)):
+            spin.blockSignals(True)
+            spin.setValue(value)
+            spin.blockSignals(False)
+        self.custom_paper_fields.setEnabled(preset == "custom")
+        self.custom_paper_fields.setVisible(preset == "custom")
+
         self.registration_checkbox.blockSignals(True)
         self.registration_checkbox.setEnabled(bool(registration))
         self.registration_checkbox.setChecked(registration.get("enabled", False))
@@ -1777,7 +1838,6 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         else:
             self.registration_info.setText(tr("一般切割：由機器設定原點。"))
         self.registration_info.setVisible(bool(registration.get("enabled")))
-        width, height = registration.get("paper_width", 0), registration.get("paper_height", 0)
         enabled = bool(registration.get("enabled") and bounds and width > 0 and height > 0)
         margins = ([bounds[0], bounds[1], width - bounds[2], height - bounds[3]]
                    if bounds and width > 0 and height > 0 else [6] * 4)
@@ -1800,6 +1860,78 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
             spin.setValue(value)
             spin.setEnabled(enabled)
         self.apply_offsets_button.setEnabled(enabled)
+        half = stroke / 2
+        outside = bool(bounds and (bounds[0] - half < 0 or bounds[1] - half < 0
+                                   or bounds[2] + half > width or bounds[3] + half > height))
+        self.paper_warning.setText(tr(
+            "定位標記超出設計紙張範圍；定位設定未變更。請調整標記距紙邊，或使用依印表機邊界最大化。"))
+        self.paper_warning.setVisible(outside)
+
+    def _paper_size_selection_changed(self, _index: int) -> None:
+        key = self.paper_size_combo.currentData()
+        custom = key == "custom"
+        self.custom_paper_fields.setEnabled(custom)
+        self.custom_paper_fields.setVisible(custom)
+        if custom or not key:
+            return
+        width, height = _PAPER_SIZES_MM[key]
+        if self.paper_orientation_combo.currentData() == "landscape":
+            width, height = height, width
+        self.set_design_paper_size(width, height)
+
+    def _paper_orientation_changed(self, _index: int) -> None:
+        direction = self.paper_orientation_combo.currentData()
+        if not direction:
+            return
+        key = self.paper_size_combo.currentData()
+        if key == "custom":
+            registration = self.metadata.get("print_cut", {})
+            width = registration.get("paper_width", self.paper_width_spin.value())
+            height = registration.get("paper_height", self.paper_height_spin.value())
+        else:
+            width, height = _PAPER_SIZES_MM.get(key, (210., 297.))
+        if direction == "landscape" and width < height or direction == "portrait" and width > height:
+            width, height = height, width
+        if key == "custom":
+            for spin, value in ((self.paper_width_spin, width), (self.paper_height_spin, height)):
+                spin.blockSignals(True)
+                spin.setValue(value)
+                spin.blockSignals(False)
+        self.set_design_paper_size(width, height)
+
+    def _custom_paper_changed(self, _value: float) -> None:
+        if self.paper_size_combo.currentData() != "custom":
+            self.paper_size_combo.setCurrentIndex(self.paper_size_combo.findData("custom"))
+        width, height = self.paper_width_spin.value(), self.paper_height_spin.value()
+        if self.paper_orientation_combo.currentData() == "landscape":
+            width, height = max(width, height), min(width, height)
+        elif self.paper_orientation_combo.currentData() == "portrait":
+            width, height = min(width, height), max(width, height)
+        for spin, value in ((self.paper_width_spin, width), (self.paper_height_spin, height)):
+            if spin.value() != value:
+                spin.blockSignals(True)
+                spin.setValue(value)
+                spin.blockSignals(False)
+        self.set_design_paper_size(width, height)
+
+    def set_design_paper_size(self, width: float, height: float) -> None:
+        if (any(isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) or not 1 <= value <= 300 for value in (width, height))):
+            QMessageBox.warning(self, tr("紙張尺寸無效"), tr("紙張寬度與高度必須介於 1–300 mm。"))
+            return
+        registration = self.metadata.get("print_cut", {})
+        if registration.get("paper_width") == width and registration.get("paper_height") == height:
+            return
+        before = self._snapshot()
+        if not registration:
+            registration = {"enabled": False, "paper_width": 210., "paper_height": 297.,
+                            "bounds": [6., 6., 204., 291.]}
+        registration["paper_width"] = float(width)
+        registration["paper_height"] = float(height)
+        self.metadata["print_cut"] = registration
+        self.push_undo(before)
+        self.refresh_all()
+        self.status_label.setText(tr("紙張尺寸已變更；定位標記位置未移動。"))
 
     def apply_registration_offset(self) -> None:
         before = self._snapshot()
@@ -1866,8 +1998,13 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
             selected = next(printer for printer in printers if printer.printerName() == name)
         registration = self.metadata["print_cut"]
         printer = QPrinter(selected)
-        printer.setPageSize(QPageSize(QSizeF(registration["paper_width"], registration["paper_height"]),
+        width, height = registration["paper_width"], registration["paper_height"]
+        printer.setPageSize(QPageSize(QSizeF(min(width, height), max(width, height)),
                                       QPageSize.Unit.Millimeter))
+        set_orientation = getattr(printer, "setPageOrientation", None)
+        if set_orientation:
+            set_orientation(QPageLayout.Orientation.Landscape if width > height
+                            else QPageLayout.Orientation.Portrait)
         page_layout = printer.pageLayout()
         page_layout.setUnits(QPageLayout.Unit.Millimeter)
         margins = page_layout.minimumMargins()
@@ -2290,7 +2427,18 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
             if dialog.exec() != QDialog.DialogCode.Accepted:
                 return
             used_settings = printer_settings(printer)
-            print_document(printer, items, metadata, calibration=calibration)
+            color_profile_path = getattr(dialog, "color_profile_path", "")
+            if not isinstance(color_profile_path, str):
+                color_profile_path = ""
+            rendering_intent = dialog.intent_combo.currentData()
+            if rendering_intent not in ("perceptual", "relative"):
+                rendering_intent = "perceptual"
+            if color_profile_path:
+                print_document(printer, items, metadata, calibration=calibration,
+                               color_profile_path=color_profile_path, rendering_intent=rendering_intent)
+            else:
+                print_document(printer, items, metadata, calibration=calibration)
+            dialog.save_color_preferences(self.settings)
             metadata["printer_settings"] = used_settings
             self.settings.setValue("printing/last", json.dumps(used_settings, ensure_ascii=False))
             self._refresh_tab_titles()

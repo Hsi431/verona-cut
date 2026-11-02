@@ -1,13 +1,17 @@
 """Print preview and document-local printer preferences; no implicit submission."""
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QPageLayout, QPainter
-from PySide6.QtPrintSupport import QPrintDialog, QPrintEngine, QPrintPreviewWidget, QPrinter
+import hashlib
+import os
+
+from PySide6.QtCore import Qt, QSizeF, QSettings
+from PySide6.QtGui import QPageLayout, QPageSize, QPainter
+from PySide6.QtPrintSupport import QPrintDialog, QPrintEngine, QPrintPreviewWidget, QPrinter, QPrinterInfo
 from PySide6.QtWidgets import (
-    QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout, QLabel, QPushButton,
-    QVBoxLayout, QWidget,
+    QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout,
+    QLabel, QPushButton, QSpinBox, QToolButton, QVBoxLayout, QWidget,
 )
 
 from .i18n import tr
+from .printer_options import display_choice, page_size_choice, read_printer_options
 from .printing import _draw_print_page, validate_printer
 
 
@@ -15,7 +19,8 @@ from .printing import _draw_print_page, validate_printer
 # PySide exposes QPrintEngine but does not name this private backend property.
 _CUPS_OPTIONS = QPrintEngine.PrintEnginePropertyKey(0xfe00)
 _MEDIA_OPTIONS = {"MediaType", "media-type", "media", "media-source", "InputSlot",
-                  "Quality", "print-quality", "Resolution", "ColorModel", "OutputMode"}
+                  "Quality", "print-quality", "Resolution", "ColorModel", "OutputMode",
+                  "Ink", "Brightness", "Contrast", "Saturation", "cupsPrintQuality"}
 
 
 def validate_printer_settings(settings):
@@ -65,36 +70,132 @@ def apply_printer_settings(printer, settings):
         printer.printEngine().setProperty(_CUPS_OPTIONS, settings["cups_options"])
 
 
+def _set_cups_option(printer, key, value):
+    """Change only the active QPrinter job's CUPS options."""
+    options = list(printer.printEngine().property(_CUPS_OPTIONS) or [])
+    values = dict(zip(options[::2], options[1::2]))
+    values[key] = value
+    flattened = [part for name, selected in values.items() for part in (name, selected)]
+    printer.printEngine().setProperty(_CUPS_OPTIONS, flattened)
+
+
+def icc_profile_settings_key(printer_name, media_value):
+    identity = f"{printer_name}\0{media_value}".encode("utf-8")
+    return "printing/icc/" + hashlib.sha256(identity).hexdigest()
+
+
 class PrintDialog(QDialog):
     def __init__(self, printer, items, metadata, *, calibration=False, saved_printer_name=None, parent=None):
         super().__init__(parent)
         self.printer, self.items, self.metadata = printer, items, metadata
         self.calibration = calibration
+        self.design_width = float(metadata.get("print_cut", {}).get("paper_width", 0))
+        self.design_height = float(metadata.get("print_cut", {}).get("paper_height", 0))
         self.setWindowTitle(tr("列印"))
-        self.resize(980, 720)
+        self.resize(1020, 740)
         outer = QVBoxLayout(self)
         body = QHBoxLayout()
         self.preview = QPrintPreviewWidget(printer, self)
         self.preview.paintRequested.connect(self._paint_preview)
         body.addWidget(self.preview, 1)
         panel = QWidget()
-        panel.setFixedWidth(260)
+        panel.setFixedWidth(320)
         details = QVBoxLayout(panel)
-        form = QFormLayout()
-        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
-        form.setVerticalSpacing(12)
+
+        self.driver_controls = QWidget()
+        driver_layout = QVBoxLayout(self.driver_controls)
+        driver_layout.setContentsMargins(0, 0, 0, 0)
+        self.driver_form = QFormLayout()
+        self.driver_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
+        self.driver_form.setVerticalSpacing(8)
+        self.printer_combo = QComboBox()
+        self._populate_printers(saved_printer_name)
+        self.driver_form.addRow(tr("印表機"), self.printer_combo)
+        self.paper_value = QLabel()
+        self.paper_value.setWordWrap(True)
+        self.paper_value.setTextFormat(Qt.TextFormat.PlainText)
+        self.driver_form.addRow(tr("列印紙張"), self.paper_value)
+        self.paper_error = QLabel()
+        self.paper_error.setWordWrap(True)
+        self.paper_error.setTextFormat(Qt.TextFormat.PlainText)
+        self.driver_form.addRow(self.paper_error)
+        self.media_combo = QComboBox()
+        self.media_combo.currentIndexChanged.connect(self._media_changed)
+        self.media_row = QLabel(tr("紙材／品質"))
+        self.driver_form.addRow(self.media_row, self.media_combo)
+        self.quality_combo = QComboBox()
+        self.quality_combo.currentIndexChanged.connect(self._quality_changed)
+        self.quality_row = QLabel(tr("列印品質"))
+        self.driver_form.addRow(self.quality_row, self.quality_combo)
+        self.color_combo = QComboBox()
+        self.color_combo.addItem(tr("彩色"), QPrinter.ColorMode.Color.value)
+        self.color_combo.addItem(tr("灰階"), QPrinter.ColorMode.GrayScale.value)
+        self.color_combo.currentIndexChanged.connect(self._color_changed)
+        self.driver_form.addRow(tr("色彩"), self.color_combo)
+        self.copies_spin = QSpinBox()
+        self.copies_spin.setRange(1, 999)
+        self.copies_spin.setValue(printer.copyCount())
+        self.copies_spin.valueChanged.connect(self.printer.setCopyCount)
+        self.driver_form.addRow(tr("份數"), self.copies_spin)
+        driver_layout.addLayout(self.driver_form)
+
+        self.advanced_toggle = QToolButton()
+        self.advanced_toggle.setText(tr("進階"))
+        self.advanced_toggle.setCheckable(True)
+        self.advanced_toggle.setChecked(False)
+        self.advanced_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.advanced_toggle.setArrowType(Qt.ArrowType.RightArrow)
+        self.advanced_options = QWidget()
+        self.advanced_form = QFormLayout(self.advanced_options)
+        self.advanced_form.setContentsMargins(0, 0, 0, 0)
+        self.advanced_options.hide()
+        self.advanced_toggle.toggled.connect(self._toggle_advanced)
+        driver_layout.addWidget(self.advanced_toggle)
+        driver_layout.addWidget(self.advanced_options)
+        details.addWidget(self.driver_controls)
+        self.options_fallback = QLabel(tr("無法讀取印表機選項；請使用系統列印設定。"))
+        self.options_fallback.setWordWrap(True)
+        self.options_fallback.setTextFormat(Qt.TextFormat.PlainText)
+        details.addWidget(self.options_fallback)
+
         self.summary = {}
+        self.summary_form = QFormLayout()
+        self.summary_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
+        self.summary_form.setVerticalSpacing(8)
         for key, label in (("printer", "印表機"), ("paper", "列印紙張"), ("media", "紙材／品質"),
                            ("resolution", "解析度"), ("copies", "份數")):
             value = QLabel()
             value.setWordWrap(True)
             value.setTextFormat(Qt.TextFormat.PlainText)
             self.summary[key] = value
-            form.addRow(tr(label), value)
-        details.addLayout(form)
-        settings = QPushButton(tr("印表機與紙材設定…"))
+            self.summary_form.addRow(tr(label), value)
+        self.summary_widget = QWidget()
+        self.summary_widget.setLayout(self.summary_form)
+        details.addWidget(self.summary_widget)
+
+        self.icc_form = QFormLayout()
+        self.profile_combo = QComboBox()
+        self.profile_combo.addItem(tr("不使用（交給印表機）"), "")
+        self.profile_combo.currentIndexChanged.connect(self._profile_changed)
+        self.choose_profile_button = QPushButton(tr("選擇 ICC 檔…"))
+        self.choose_profile_button.clicked.connect(self._choose_profile)
+        self.icc_form.addRow(tr("色彩描述檔"), self.profile_combo)
+        self.icc_form.addRow("", self.choose_profile_button)
+        self.intent_combo = QComboBox()
+        self.intent_combo.addItem(tr("感知"), "perceptual")
+        self.intent_combo.addItem(tr("相對色度"), "relative")
+        self.intent_combo.currentIndexChanged.connect(self.preview.updatePreview)
+        self.icc_form.addRow(tr("演算意圖"), self.intent_combo)
+        details.addLayout(self.icc_form)
+
+        legacy_settings_label = QPushButton(tr("印表機與紙材設定…"), panel)
+        legacy_settings_label.setToolTip(tr("設定會隨目前設計儲存。"))
+        legacy_settings_label.hide()
+        settings = QPushButton(tr("更多印表機設定…"))
+        settings.setAccessibleName(tr("更多印表機設定…"))
         settings.setToolTip(tr("設定會隨目前設計儲存。"))
         settings.clicked.connect(self._configure)
+        self.more_settings_button = settings
         details.addWidget(settings)
         actual_size = QLabel(tr("100% 原尺寸 · 不縮放"))
         details.addWidget(actual_size)
@@ -126,16 +227,225 @@ class PrintDialog(QDialog):
         buttons.rejected.connect(self.reject)
         footer.addWidget(buttons)
         outer.addLayout(footer)
+
+        self.options = None
+        self.options_available = False
+        self.option_keys = {}
+        self.advanced_combos = {}
+        self.color_profile_path = ""
+        self.settings = QSettings("Verona", "Workspace")
+        self.printer_combo.currentIndexChanged.connect(self._printer_changed)
+        self._load_options()
         self._refresh_summary()
+
+    def _populate_printers(self, selected_name):
+        printers = QPrinterInfo.availablePrinters()
+        names = [info.printerName() for info in printers]
+        current = self.printer.printerName()
+        if current and current not in names:
+            names.append(current)
+        if not names:
+            names = [current or tr("目前印表機")]
+        for name in names:
+            self.printer_combo.addItem(name, name)
+        desired = selected_name or current
+        index = self.printer_combo.findData(desired)
+        if index >= 0:
+            self.printer_combo.setCurrentIndex(index)
+
+    def _toggle_advanced(self, expanded):
+        self.advanced_toggle.setArrowType(Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
+        self.advanced_options.setVisible(expanded)
+
+    def _option_value_map(self):
+        values = self.printer.printEngine().property(_CUPS_OPTIONS) or []
+        return dict(zip(values[::2], values[1::2]))
+
+    def _find_option(self, names):
+        return next((key for key in self.options or {} if key.casefold() in names), None)
+
+    def _configure_combo(self, combo, key):
+        combo.blockSignals(True)
+        combo.clear()
+        if key and self.options and key in self.options:
+            option = self.options[key]
+            current = self._option_value_map().get(key, option.get("default"))
+            for value in option["choices"]:
+                combo.addItem(display_choice(value), value)
+            index = combo.findData(current)
+            if index >= 0:
+                combo.setCurrentIndex(index)
+        combo.blockSignals(False)
+        return bool(combo.count())
+
+    def _load_options(self):
+        try:
+            self.options = read_printer_options(self.printer.printerName())
+        except (OSError, ValueError, TypeError):
+            self.options = None
+        self.options_available = bool(self.options)
+        self.driver_controls.setVisible(self.options_available)
+        self.options_fallback.setVisible(not self.options_available)
+        self.summary_widget.setVisible(not self.options_available)
+        if not self.options_available:
+            self.paper_error.clear()
+            self._load_profile_preference("")
+            self.preview.updatePreview()
+            return
+
+        page = page_size_choice(self.options, self.design_width, self.design_height)
+        if page is None:
+            self.paper_error.setText(tr("這台印表機沒有設計紙張尺寸；請開啟系統列印設定選擇支援的紙張。"))
+        else:
+            key, value = page
+            self.option_keys["PageSize"] = key
+            self._set_option(key, value)
+            size = QPageSize(QSizeF(min(self.design_width, self.design_height),
+                                    max(self.design_width, self.design_height)),
+                             QPageSize.Unit.Millimeter)
+            accepted = self.printer.setPageSize(size)
+            self.printer.setPageOrientation(QPageLayout.Orientation.Landscape
+                if self.design_width > self.design_height else QPageLayout.Orientation.Portrait)
+            self.paper_error.setText("" if accepted else tr("這台印表機無法使用設計紙張尺寸。"))
+        media_key = self._find_option({"mediatype", "media-type", "media", "media-source", "inputslot"})
+        quality_key = self._find_option({"cupsprintquality", "quality", "print-quality"})
+        self.option_keys["Media"] = media_key
+        self.option_keys["Quality"] = quality_key
+        self.media_row.setVisible(self._configure_combo(self.media_combo, media_key))
+        self.media_combo.setVisible(bool(media_key))
+        self.quality_row.setVisible(self._configure_combo(self.quality_combo, quality_key))
+        self.quality_combo.setVisible(bool(quality_key))
+
+        ink_key = self._find_option({"ink"})
+        self.option_keys["Ink"] = ink_key
+        if ink_key:
+            self._configure_combo(self.color_combo, ink_key)
+            values = self.options[ink_key]["choices"]
+            for index, value in enumerate(values):
+                label = tr("彩色") if value.casefold() in ("color", "colour") else (
+                    tr("灰階") if value.casefold() in ("mono", "monochrome", "gray", "grayscale") else value)
+                self.color_combo.setItemText(index, label)
+            current = self._option_value_map().get(ink_key, self.options[ink_key].get("default"))
+            self.color_combo.setCurrentIndex(max(0, self.color_combo.findData(current)))
+        else:
+            self.color_combo.blockSignals(True)
+            self.color_combo.setCurrentIndex(0 if self.printer.colorMode() == QPrinter.ColorMode.Color else 1)
+            self.color_combo.blockSignals(False)
+
+        self._clear_advanced()
+        for key in ("Brightness", "Contrast", "Saturation"):
+            actual = self._find_option({key.casefold()})
+            if not actual:
+                continue
+            combo = QComboBox()
+            combo.currentIndexChanged.connect(lambda _index, option=actual, control=combo:
+                                               self._set_option(option, control.currentData()))
+            self._configure_combo(combo, actual)
+            self.advanced_form.addRow(tr(key), combo)
+            self.advanced_combos[actual] = combo
+        self._load_profile_preference(self._current_media_value())
+        self._refresh_summary()
+        self.preview.updatePreview()
+
+    def _clear_advanced(self):
+        while self.advanced_form.rowCount():
+            self.advanced_form.removeRow(0)
+        self.advanced_combos.clear()
+
+    def _set_option(self, key, value):
+        if key and value is not None:
+            _set_cups_option(self.printer, key, str(value))
+            self._refresh_summary()
+            self.preview.updatePreview()
+
+    def _current_media_value(self):
+        if self.media_combo.count():
+            return self.media_combo.currentData() or ""
+        return ""
+
+    def _media_changed(self, _index):
+        self._set_option(self.option_keys.get("Media"), self.media_combo.currentData())
+        self._load_profile_preference(self._current_media_value())
+
+    def _quality_changed(self, _index):
+        self._set_option(self.option_keys.get("Quality"), self.quality_combo.currentData())
+
+    def _color_changed(self, _index):
+        key = self.option_keys.get("Ink")
+        if key:
+            self._set_option(key, self.color_combo.currentData())
+            mode = QPrinter.ColorMode.Color if self.color_combo.currentData().casefold() in ("color", "colour") \
+                else QPrinter.ColorMode.GrayScale
+            self.printer.setColorMode(mode)
+        else:
+            self.printer.setColorMode(QPrinter.ColorMode(self.color_combo.currentData()))
+        self._refresh_summary()
+        self.preview.updatePreview()
+
+    def _printer_changed(self, _index):
+        name = self.printer_combo.currentData()
+        if name and name != self.printer.printerName():
+            self.printer.setPrinterName(name)
+            self.printer.printEngine().setProperty(_CUPS_OPTIONS, [])
+            self._load_options()
+            self._refresh_summary()
+
+    def _profile_key(self, media_value=None):
+        return icc_profile_settings_key(self.printer.printerName(),
+                                        self._current_media_value() if media_value is None else media_value)
+
+    def _load_profile_preference(self, media_value):
+        key = self._profile_key(media_value)
+        path = self.settings.value(key + "/profile", "", type=str)
+        intent = self.settings.value(key + "/intent", "perceptual", type=str)
+        if path and os.path.isfile(path):
+            self._select_profile(path)
+        else:
+            self._select_profile("")
+        index = self.intent_combo.findData(intent)
+        if index >= 0:
+            self.intent_combo.setCurrentIndex(index)
+
+    def _select_profile(self, path):
+        self.color_profile_path = path
+        self.profile_combo.blockSignals(True)
+        self.profile_combo.clear()
+        self.profile_combo.addItem(tr("不使用（交給印表機）"), "")
+        if path:
+            self.profile_combo.addItem(os.path.basename(path), path)
+            self.profile_combo.setCurrentIndex(1)
+        self.profile_combo.blockSignals(False)
+        self.preview.updatePreview()
+
+    def _choose_profile(self):
+        path, _ = QFileDialog.getOpenFileName(self, tr("選擇 ICC 色彩描述檔"), "",
+                                               tr("ICC 色彩描述檔 (*.icc *.icm);;所有檔案 (*)"))
+        if path:
+            self._select_profile(path)
+
+    def _profile_changed(self, _index):
+        self.color_profile_path = self.profile_combo.currentData() or ""
+        self.preview.updatePreview()
+
+    def save_color_preferences(self, settings=None):
+        if settings is None:
+            settings = self.settings
+        key = self._profile_key()
+        settings.setValue(key + "/profile", self.color_profile_path)
+        settings.setValue(key + "/intent", self.intent_combo.currentData())
 
     def _refresh_summary(self):
         settings = printer_settings(self.printer)
-        paper = self.printer.pageLayout().fullRect(QPageLayout.Unit.Millimeter)
+        if self.design_width and self.design_height:
+            paper_text = f"{self.design_width:g} × {self.design_height:g} mm"
+        else:
+            paper = self.printer.pageLayout().fullRect(QPageLayout.Unit.Millimeter)
+            paper_text = f"{paper.width():g} × {paper.height():g} mm"
+        self.paper_value.setText(paper_text)
         self.summary["printer"].setText(self.printer.printerName())
-        self.summary["paper"].setText(f"{self.printer.pageLayout().pageSize().name()} · "
-                                      f"{paper.width():g} × {paper.height():g} mm")
+        self.summary["paper"].setText(paper_text)
         options = settings["cups_options"]
-        self.summary["media"].setText("\n".join(f"{key}: {value}" for key, value in
+        self.summary["media"].setText("\n".join(f"{key}: {display_choice(value)}" for key, value in
                                               zip(options[::2], options[1::2])) or tr("印表機預設"))
         color = tr("彩色") if self.printer.colorMode() == QPrinter.ColorMode.Color else tr("灰階")
         self.summary["resolution"].setText(f"{settings['resolution']} DPI · {color}")
@@ -153,11 +463,14 @@ class PrintDialog(QDialog):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.printer.setDuplex(QPrinter.DuplexMode.DuplexNone)
             self.printer.setFullPage(True)
+            self._load_options()
             self._refresh_summary()
             self.preview.updatePreview()
 
     def _paint_preview(self, printer):
         try:
+            if self.paper_error.text():
+                raise ValueError(self.paper_error.text())
             validate_printer(printer, self.items, self.metadata, calibration=self.calibration)
         except ValueError as error:
             self.error.setText(str(error))
@@ -165,7 +478,9 @@ class PrintDialog(QDialog):
             return
         painter = QPainter(printer)
         try:
-            _draw_print_page(painter, self.items, self.metadata, calibration=self.calibration)
+            _draw_print_page(painter, self.items, self.metadata, calibration=self.calibration,
+                             color_profile_path=self.color_profile_path or None,
+                             rendering_intent=self.intent_combo.currentData() or "perceptual", preview=True)
             self.error.clear()
             self.print_button.setEnabled(True)
         except Exception as error:

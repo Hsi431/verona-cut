@@ -149,11 +149,14 @@ Reinstalling is required after pulling changes when installed with `pip install 
    compare and apply a bounded smoothing edit to selected vector or image cutlines;
    undo restores the original paths.
 
-3. **Set up the sheet.** Choose paper dimensions and, for Print & Cut, matching
-   registration marks. Print-only sheets do not require registration marks.
+3. **Set up the sheet.** Choose A4, A5, A6, B5, Letter, 4×6 in, 5×7 in, or
+   custom dimensions and orientation. If a size moves registration marks beyond
+   the sheet, Verona keeps their positions and shows how to adjust them.
 4. **Print.** Use the toolbar button beside the import controls or `Ctrl+P`.
-   Verona provides the preview; **Printer and media settings…** opens Qt's
-   Linux print dialog with the installed printer driver's options.
+   Choose the printer, driver media/quality, color mode and copies beside the
+   preview. ICC profiles and rendering intent are optional; **More printer
+   settings…** opens Qt's Linux print dialog. If driver options cannot be read,
+   use that system dialog instead.
 5. **Review and cut.** Use the fixed controls at the bottom of the right panel
    for cut preview, PLT export or sending. Enter the cutter's displayed IPv4
    address under **Connection**, check the connection, review tool/force/speed
@@ -167,10 +170,11 @@ the selection. Ctrl+] / Ctrl+[ moves layers forward/backward; add Shift to move
 to the front/back. Ctrl+= or Ctrl++ zooms in, Ctrl+- zooms out, Ctrl+1 shows 100%, and
 Ctrl+0 fits page height. Esc or Ctrl+Shift+A deselects.
 
-Previewing or changing print settings does not submit a job. After successful
-submission, printer/media preferences are remembered locally and included when
-the design is saved. Saved document preferences take priority; paper dimensions
-and orientation follow the design. An unavailable saved printer produces a notice.
+Previewing or changing print settings does not submit a job. Driver options are
+sent with that print job and saved in the design; Verona does not change printer
+defaults. ICC profile paths are kept in local settings by printer and media and
+are not written into design files. Paper dimensions and orientation follow the
+design. An unavailable saved printer produces a notice.
 
 Hidden layers are excluded from print and cut output; locked layers still
 output but cannot be edited. Cuts are checked against the workspace and active

@@ -5,7 +5,8 @@ Printer jobs are submitted only by an explicit call to print_document.
 import math
 
 from PySide6.QtCore import QMarginsF, QPointF, QRectF, QSizeF, Qt
-from PySide6.QtGui import QPageLayout, QPageSize, QPainter, QPainterPath, QPdfWriter, QPen, QPolygonF
+from PySide6.QtGui import (QColorSpace, QPageLayout, QPageSize, QPainter, QPainterPath,
+                           QPdfWriter, QPen, QPolygonF, QImage)
 
 from .i18n import tr
 from .artwork import draw_printed_item
@@ -23,7 +24,13 @@ def printer_profiles(paper_width, paper_height):
     profiles = []
     for info in QPrinterInfo.availablePrinters():
         printer = QPrinter(info)
-        accepted = printer.setPageSize(QPageSize(QSizeF(paper_width, paper_height), QPageSize.Unit.Millimeter))
+        size = QPageSize(QSizeF(min(paper_width, paper_height), max(paper_width, paper_height)),
+                         QPageSize.Unit.Millimeter)
+        accepted = printer.setPageSize(size)
+        set_orientation = getattr(printer, "setPageOrientation", None)
+        if set_orientation:
+            set_orientation(QPageLayout.Orientation.Landscape if paper_width > paper_height
+                            else QPageLayout.Orientation.Portrait)
         layout = printer.pageLayout()
         layout.setUnits(QPageLayout.Unit.Millimeter)
         margins = layout.minimumMargins()
@@ -96,14 +103,14 @@ def print_page_size(items, metadata, *, calibration=False):
             or not isinstance(bounds, (list, tuple)) or len(bounds) != 4
             or any(isinstance(value, bool) or not isinstance(value, (int, float))
                    or not math.isfinite(value) for value in bounds)
-            or not (0 < bounds[0] < bounds[2] < width and 0 < bounds[1] < bounds[3] < height)):
+            or not (bounds[0] < bounds[2] and bounds[1] < bounds[3])):
         raise ValueError(tr("列印紙張或定位範圍無效。"))
     if not calibration and not any(printable(item) for item in items):
         raise ValueError(tr("沒有可列印的圖稿。"))
     stroke, _ = registration_profile(registration)
     if (bounds[0] < stroke / 2 or bounds[1] < stroke / 2
             or bounds[2] + stroke / 2 > width or bounds[3] + stroke / 2 > height):
-        raise ValueError(tr("列印紙張或定位範圍無效。"))
+        raise ValueError(tr("定位標記超出設計紙張範圍；請調整紙邊距，或使用依印表機邊界最大化。"))
     return QSizeF(width, height)
 
 
@@ -144,7 +151,8 @@ def validate_printer(printer, items, metadata, *, calibration=False):
         raise ValueError(tr("定位標記超出這台印表機的可列印範圍，請先依印表機邊界調整定位範圍。"))
 
 
-def print_document(printer, items, metadata, *, calibration=False):
+def print_document(printer, items, metadata, *, calibration=False,
+                   color_profile_path=None, rendering_intent="perceptual"):
     """Print one sheet at actual size using a printer approved in the print dialog."""
     from PySide6.QtPrintSupport import QPrinter
     validate_printer(printer, items, metadata, calibration=calibration)
@@ -154,7 +162,8 @@ def print_document(printer, items, metadata, *, calibration=False):
     if not painter.isActive():
         raise OSError(tr("無法開始列印，請檢查印表機與列印佇列。"))
     try:
-        _draw_print_page(painter, items, metadata, calibration=calibration)
+        _draw_print_page(painter, items, metadata, calibration=calibration,
+                         color_profile_path=color_profile_path, rendering_intent=rendering_intent)
     except Exception:
         printer.abort()
         raise
@@ -164,7 +173,8 @@ def print_document(printer, items, metadata, *, calibration=False):
         raise OSError(tr("列印傳送失敗，請檢查列印佇列；程式不會自動重送。"))
 
 
-def _draw_print_page(painter, items, metadata, *, calibration=False):
+def _draw_print_page(painter, items, metadata, *, calibration=False, color_profile_path=None,
+                     rendering_intent="perceptual", preview=False):
     registration = metadata["print_cut"]
     width, height = registration["paper_width"], registration["paper_height"]
     painter.save()
@@ -175,8 +185,12 @@ def _draw_print_page(painter, items, metadata, *, calibration=False):
         device = painter.device()
         painter.scale(device.logicalDpiX() / 25.4, device.logicalDpiY() / 25.4)
         painter.fillRect(QRectF(0, 0, width, height), Qt.GlobalColor.white)
-        for item in items:
-            draw_printed_item(painter, item)
+        if color_profile_path:
+            _draw_profiled_artwork(painter, items, width, height, color_profile_path,
+                                   rendering_intent, preview)
+        else:
+            for item in items:
+                draw_printed_item(painter, item)
         if calibration:
             painter.setPen(QPen(Qt.GlobalColor.black, 0.15))
             painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -187,3 +201,83 @@ def _draw_print_page(painter, items, metadata, *, calibration=False):
             draw_registration_marks(painter, registration["bounds"], registration)
     finally:
         painter.restore()
+
+
+def _draw_profiled_artwork(painter, items, width, height, profile_path, intent, preview):
+    """Render artwork through an ICC transform while leaving marks and cut lines untouched."""
+    from PIL import Image, ImageCms
+
+    if intent not in ("perceptual", "relative"):
+        raise ValueError(tr("不支援的 ICC 演算意圖。"))
+    try:
+        with open(profile_path, "rb") as profile_file:
+            profile_bytes = profile_file.read()
+        destination = ImageCms.getOpenProfile(profile_path)
+        source = ImageCms.createProfile("sRGB")
+        color_space = destination.profile.xcolor_space.strip()
+        if color_space not in ("RGB", "CMYK"):
+            raise ValueError(tr("ICC 色彩描述檔必須是 RGB 或 CMYK 輸出描述檔。"))
+        output_mode = color_space
+        intent_value = (ImageCms.Intent.PERCEPTUAL if intent == "perceptual"
+                        else ImageCms.Intent.RELATIVE_COLORIMETRIC)
+        output_transform = ImageCms.buildTransform(
+            source, destination, "RGB", output_mode, renderingIntent=intent_value)
+        preview_transform = (ImageCms.buildTransform(
+            destination, source, output_mode, "RGB", renderingIntent=intent_value) if preview else None)
+        screen_space = QColorSpace(QColorSpace.NamedColorSpace.SRgb)
+        target_space = QColorSpace.fromIccProfile(profile_bytes) if color_space == "RGB" else QColorSpace()
+    except Exception as error:
+        raise ValueError(tr("無法讀取或套用 ICC 色彩描述檔：{error}", error=error)) from error
+
+    dpi_x = max(1, painter.device().logicalDpiX())
+    dpi_y = max(1, painter.device().logicalDpiY())
+    pixels_w = max(1, math.ceil(width * dpi_x / 25.4))
+    pixels_h = max(1, math.ceil(height * dpi_y / 25.4))
+    tile_size = max(pixels_w, pixels_h) if pixels_w * pixels_h <= 16_000_000 else 2048
+    for top in range(0, pixels_h, tile_size):
+        for left in range(0, pixels_w, tile_size):
+            tile_width, tile_height = min(tile_size, pixels_w-left), min(tile_size, pixels_h-top)
+            layer = QImage(tile_width, tile_height, QImage.Format.Format_RGBA8888)
+            layer.fill(Qt.GlobalColor.transparent)
+            artwork = QPainter(layer)
+            try:
+                artwork.setRenderHint(QPainter.RenderHint.Antialiasing)
+                artwork.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+                artwork.setRenderHint(QPainter.RenderHint.LosslessImageRendering)
+                artwork.scale(dpi_x / 25.4, dpi_y / 25.4)
+                artwork.translate(-left * 25.4 / dpi_x, -top * 25.4 / dpi_y)
+                for item in items:
+                    draw_printed_item(artwork, item)
+            finally:
+                artwork.end()
+            try:
+                rgba = Image.frombytes("RGBA", (tile_width, tile_height), bytes(layer.constBits()))
+                alpha = rgba.getchannel("A")
+                rgb = rgba.convert("RGB")
+                if output_mode == "CMYK" and not preview:
+                    white = Image.new("RGB", rgb.size, "white")
+                    rgb = Image.composite(rgb, white, alpha)
+                converted = ImageCms.applyTransform(rgb, output_transform)
+                if preview:
+                    converted = ImageCms.applyTransform(converted, preview_transform)
+                    converted.putalpha(alpha)
+                    raw = converted.tobytes("raw", "RGBA")
+                    image = QImage(raw, tile_width, tile_height, tile_width * 4,
+                                   QImage.Format.Format_RGBA8888).copy()
+                    image.setColorSpace(screen_space)
+                elif output_mode == "CMYK":
+                    raw = converted.tobytes("raw", "CMYK")
+                    image = QImage(raw, tile_width, tile_height, tile_width * 4,
+                                   QImage.Format.Format_CMYK8888).copy()
+                else:
+                    converted.putalpha(alpha)
+                    raw = converted.tobytes("raw", "RGBA")
+                    image = QImage(raw, tile_width, tile_height, tile_width * 4,
+                                   QImage.Format.Format_RGBA8888).copy()
+                    if target_space.isValid():
+                        image.setColorSpace(target_space)
+            except Exception as error:
+                raise ValueError(tr("ICC 色彩轉換失敗：{error}", error=error)) from error
+            x_mm, y_mm = left * 25.4 / dpi_x, top * 25.4 / dpi_y
+            w_mm, h_mm = tile_width * 25.4 / dpi_x, tile_height * 25.4 / dpi_y
+            painter.drawImage(QRectF(x_mm, y_mm, w_mm, h_mm), image)
