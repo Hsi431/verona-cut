@@ -47,7 +47,8 @@ def stylesheet(c):
         QMainWindow, QWidget {{ background: {c['background']}; color: {c['text']}; }}
         QLabel {{ background: transparent; }}
         QFrame#inspector, QFrame#layers {{ background: {c['surface']}; border: 0; }}
-        QToolBar#designTools, QToolBar#viewTools {{ background: transparent; border: 0; spacing: 6px; padding: 0; }}
+        QToolBar#designTools, QToolBar#viewTools {{ background: transparent; border: 0; spacing: 0; padding: 0; }}
+        QToolBar#designTools > QToolButton, QToolBar#viewTools > QToolButton {{ margin-right: 6px; }}
         QToolBar#designTools::separator {{ background: {c['separator']}; width: 1px; margin: 4px 6px; }}
         QTreeView {{ background: {c['input']}; border: 1px solid {c['border']}; border-radius: 6px; selection-background-color: {c['selection']}; selection-color: {c['selection_text']}; }}
         QTreeView::item {{ min-height: 26px; }}
