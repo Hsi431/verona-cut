@@ -202,6 +202,17 @@ class CommandRegistryTests(unittest.TestCase):
         self.assertEqual(undone["undo_steps"], 0)
         self.assertEqual(self.window._document_state(), before)
 
+    def test_batch_pack_overflow_opens_new_pages_when_applied(self):
+        self.install(self.window, [rectangle("big", x=10, y=10, width=200, height=200)], [])
+        tabs = len(self.window._documents)
+        revision = self.bridge.revision()
+        plan = self.bridge.dispatch("command_batch_preview", expected_revision=revision, steps=[
+            {"command_id": "arrange.pack", "object_indices": [0],
+             "parameters": {"copies_per_unit": [3], "new_page_for_unplaced": True}},
+        ])
+        self.bridge.dispatch("apply", expected_revision=revision, plan_id=plan["plan_id"])
+        self.assertGreater(len(self.window._documents), tabs)
+
     def test_batch_failure_reports_step_and_creates_no_plan_or_live_change(self):
         self.install(self.window, [rectangle("base")], [])
         before = copy.deepcopy(self.window._document_state())
