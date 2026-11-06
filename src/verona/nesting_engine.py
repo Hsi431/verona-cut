@@ -13,7 +13,8 @@ from PySide6.QtGui import QPainterPath, QPainterPathStroker, QPolygonF, QTransfo
 from .editor_actions import cutting_frame, editable_indices, finite_number
 from .grouping import remap_group_ids, selection_units
 from .layers import cuttable, printable
-from .packing import (PACKING_PARAMETER_NAMES, _footprint, _material_area,
+from .packing import (PACKING_PARAMETER_NAMES, _buffer, _footprint, _material_area,
+                      _prepare_packing_source, _restore_packing_plan,
                       _transform_placement)
 from .geometry import copy_items as _copy_items
 
@@ -312,10 +313,7 @@ def _contains_outline(guard, path):
 def _clearance(path, gap):
     if not gap or path.isEmpty():
         return path
-    stroker = QPainterPathStroker()
-    stroker.setWidth(gap+2e-4)
-    stroker.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-    return path.united(stroker.createStroke(path))
+    return _buffer(path, gap+2e-4)
 
 
 def _verify_layout(placed_paths, placed_guards, fixed_paths, marks,
@@ -348,21 +346,6 @@ def _verify_layout(placed_paths, placed_guards, fixed_paths, marks,
                    for clearance in clearances)
 
 
-def _rank(plan, area):
-    _items, _selection, details = plan
-    requested = sum(unit["requested_placed"] for unit in details["units"])
-    right = max((placement["bounds_mm"][2] for placement in details["placements"]),
-                default=area.left())
-    return requested, -(right-area.left())
-
-
-def layout_is_better(candidate, baseline, metadata, parameters):
-    """Compare plans by required copies first, then the used strip width."""
-    margin = finite_number(parameters.get("margin_mm", 0), "margin_mm", 0, 150)
-    area = _area_for(metadata, margin)
-    return _rank(candidate, area) > _rank(baseline, area)
-
-
 def pack_with_nesting(items, metadata, indices, parameters, *, seed_count=3,
                       seed_start=20261106):
     """Run patched spyrrow seeds and return only a real-outline-verified plan."""
@@ -384,6 +367,8 @@ def pack_with_nesting(items, metadata, indices, parameters, *, seed_count=3,
     margin = finite_number(parameters.get("margin_mm", 0), "margin_mm", 0, 150)
     time_limit = finite_number(parameters.get("time_limit_seconds", 12),
                                "time_limit_seconds", .05, 60)
+    start = time.monotonic()
+    items, indices, parameters, pairing = _prepare_packing_source(items, indices, parameters)
     rotation_step = parameters.get("rotation_step_deg", 90)
     if type(rotation_step) is not int or not 5 <= rotation_step <= 90:
         raise ValueError("rotation_step_deg must be an integer from 5 to 90.")
@@ -398,7 +383,6 @@ def pack_with_nesting(items, metadata, indices, parameters, *, seed_count=3,
     if (len(items)-len(selected_indices)+sum(count*len(unit) for count, unit in zip(counts, units)) > 2000):
         raise ValueError("Packing is limited to 2000 objects.")
 
-    start = time.monotonic()
     shapes, origins, unit_paths, unit_guards = _unit_shapes(items, units)
     holes = _static_holes(items, set(selected_indices), metadata, area)
     remaining = [item for index, item in enumerate(items) if index not in selected_indices]
@@ -450,15 +434,18 @@ def pack_with_nesting(items, metadata, indices, parameters, *, seed_count=3,
     solver_extras = [solver_extras[index] if solver_demands[index] else 0
                      for index in range(len(units))]
 
-    remaining_seconds = time_limit - (time.monotonic()-start) - 0.75
+    postprocess_reserve = min(4.5, max(
+        0.35, 0.15 + len(units)*0.2 + sum(len(shape) for shape in shapes)/5000))
+    remaining_seconds = time_limit - (time.monotonic()-start) - postprocess_reserve
     if remaining_seconds < 1:
         return None
-    solver_seconds = max(1, int(remaining_seconds/seed_count))
+    solver_seconds = int(remaining_seconds)
     required_seconds = max(1, int(solver_seconds*.65)) if any(solver_extras) else solver_seconds
     fill_seconds = solver_seconds-required_seconds
     start_points = {f"unit-{index}": index for index in range(len(units))}
     outcomes = []
     if any(solver_demands):
+        search_deadline = time.monotonic()+solver_seconds
         with ThreadPoolExecutor(max_workers=seed_count, thread_name_prefix="verona-nesting") as executor:
             futures = {executor.submit(_solve_seed, module, shapes, solver_demands, counts,
                                        solver_extras, allowed, holes, area.width(), area.height(),
@@ -470,8 +457,10 @@ def pack_with_nesting(items, metadata, indices, parameters, *, seed_count=3,
                     solutions.append((seed, future.result()))
                 except BaseException:
                     continue
+        search_limited = time.monotonic() >= search_deadline-0.05
     else:
         solutions = [(seed_start+offset, None) for offset in range(seed_count)]
+        search_limited = False
     for seed, solution in solutions:
         placement_groups = [[] for _ in units]
         for placed in [] if solution is None else solution:
@@ -508,7 +497,9 @@ def pack_with_nesting(items, metadata, indices, parameters, *, seed_count=3,
         requested_placed = [min(counts[index], copies_by_unit[index])
                             for index in range(len(units))]
         right = max((entry[4].right() for entry in placements), default=area.left())
-        outcomes.append(((sum(requested_placed), -(right-area.left()), -seed),
+        outcomes.append(((sum(requested_placed),
+                         len(placements) if parameters.get("fill") else 0,
+                         -(right-area.left()), -seed),
                          (seed, placements, copies_by_unit, requested_placed)))
 
     if not outcomes:
@@ -534,7 +525,6 @@ def pack_with_nesting(items, metadata, indices, parameters, *, seed_count=3,
                 for copy_number in range(requested_placed[unit_id]+1, count+1)]
     used_area = area.width()*area.height()
     usage = 100*_material_area(copied_items)/used_area if used_area else 0.0
-    elapsed = time.monotonic()-start
     details = {"action": "pack_objects",
         "layout_method": "spyrrow continuous strip packing with static keep-outs",
         "shape_aware": parameters.get("shape_aware", False), "copies": len(placements),
@@ -543,7 +533,7 @@ def pack_with_nesting(items, metadata, indices, parameters, *, seed_count=3,
         "pages": [{"page": 0, "copies": len(placements),
                    "paper_utilization_percent": usage}], "new_pages": [], "page_limit": 100,
         "rotation_step_deg": rotation_step, "time_limit_seconds": time_limit,
-        "limit_reached": elapsed >= solver_seconds-0.05,
+        "limit_reached": search_limited,
         "deterministic": False, "registration_mark_clearance_mm": gap,
         "placements": detail_placements,
         "units": [{"source_indices": unit, "requested": count,
@@ -551,4 +541,4 @@ def pack_with_nesting(items, metadata, indices, parameters, *, seed_count=3,
                    "copies": copies_by_unit[index]}
                   for index, (unit, count) in enumerate(zip(units, counts))],
         "engine": "spyrrow", "seed": seed}
-    return copied_items, selection, details
+    return _restore_packing_plan((copied_items, selection, details), pairing)

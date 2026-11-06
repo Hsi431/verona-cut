@@ -1,5 +1,7 @@
 """Bounded mixed-unit packing with exact footprint collision checks."""
+import copy
 import time
+from uuid import uuid4
 
 import numpy as np
 
@@ -10,7 +12,7 @@ from .artwork import bleed_path, contour_path, image_path, item_bounds, vector_p
 from .editor_actions import cutting_frame, editable_indices, finite_number
 from .grouping import remap_group_ids, selection_units
 from .i18n import tr
-from .raster_import import _offset_path, _without_holes
+from .raster_import import _stroke_region, _without_holes
 from .layers import cuttable, printable
 from .geometry import copy_items as _copy_items, transform_item as _transform_item
 
@@ -51,7 +53,136 @@ def _footprint(items, shape_aware):
 def _buffer(path, gap):
     if not gap or path.isEmpty():
         return path
-    return _offset_path(path, gap / 2)
+    return path.united(_stroke_region(path, gap))
+
+
+def _paired_cutline_matches(items, selected):
+    images = [index for index in sorted(selected)
+              if "image_data" in items[index] and cuttable(items[index])
+              and not items[index].get("group_path") and items[index].get("contours")]
+    if not images:
+        return None
+    candidates = []
+    for cut_index in sorted(selected):
+        cutter = items[cut_index]
+        contours = cutter.get("contours", [])
+        if ("image_data" in cutter or not cuttable(cutter) or len(contours) < 1
+                or cutter.get("group_path")):
+            continue
+        image_paths = {index: contour_path(items[index]["contours"]) for index in images}
+        matches = []
+        used = set()
+        for contour in contours:
+            cut_path = contour_path([contour])
+            bounds = cut_path.boundingRect()
+            enclosed = []
+            for image_index, image_path in image_paths.items():
+                image_bounds = image_path.boundingRect()
+                if (bounds.left() <= image_bounds.left()+1e-6
+                        and bounds.top() <= image_bounds.top()+1e-6
+                        and bounds.right() >= image_bounds.right()-1e-6
+                        and bounds.bottom() >= image_bounds.bottom()-1e-6
+                        and cut_path.contains(image_path)):
+                    enclosed.append(image_index)
+            if len(enclosed) != 1 or enclosed[0] in used:
+                matches = []
+                break
+            used.add(enclosed[0])
+            matches.append(enclosed[0])
+        if len(matches) == len(contours):
+            candidates.append((cut_index, matches))
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _prepare_packing_source(items, indices, parameters):
+    selected = set(editable_indices(items, indices))
+    pairing = _paired_cutline_matches(items, selected)
+    if pairing is None:
+        return items, indices, parameters, None
+
+    cut_index, image_indices = pairing
+    original_units = selection_units(items, selected)
+    cut_unit = next(index for index, unit in enumerate(original_units)
+                    if cut_index in unit)
+    working = _copy_items(items)
+    templates, fragment_sources = {}, {}
+    pair_id = str(uuid4())
+    templates[pair_id] = _copy_items([items[cut_index]])[0]
+    selected.discard(cut_index)
+    placeholder = working[cut_index]
+    placeholder.clear()
+    placeholder.update({"name": "", "contours": [], "cut": False, "print": False,
+                        "visible": False, "_packing_pair_placeholder": True})
+    for contour_index, image_index in enumerate(image_indices):
+        group_id = str(uuid4())
+        fragment = _copy_items([items[cut_index]])[0]
+        fragment["contours"] = [fragment["contours"][contour_index]]
+        fragment["group_path"] = [group_id]
+        fragment["_packing_pair_fragment"] = pair_id
+        if contour_index == 0:
+            fragment_index = cut_index
+            working[fragment_index] = fragment
+        else:
+            fragment_index = len(working)
+            working.append(fragment)
+        working[image_index]["group_path"] = [group_id]
+        working[image_index]["_packing_pair_image"] = True
+        fragment_sources[fragment_index] = cut_index
+        selected.add(fragment_index)
+        selected.add(image_index)
+
+    adjusted = dict(parameters)
+    counts = adjusted.get("copies_per_unit")
+    if isinstance(counts, list) and len(counts) == len(original_units):
+        adjusted["copies_per_unit"] = counts[:cut_unit] + counts[cut_unit+1:]
+    return working, sorted(selected), adjusted, {
+        "templates": templates,
+        "fragment_sources": fragment_sources,
+    }
+
+
+def _restore_packing_plan(plan, pairing):
+    if pairing is None:
+        return plan
+
+    templates = pairing["templates"]
+
+    def restore_items(items, selection):
+        result, old_to_new, merged = [], {}, {}
+        for old_index, item in enumerate(items):
+            if item.get("_packing_pair_placeholder"):
+                continue
+            pair_id = item.get("_packing_pair_fragment")
+            if pair_id:
+                if pair_id not in merged:
+                    combined = _copy_items([templates[pair_id]])[0]
+                    combined["contours"] = []
+                    merged[pair_id] = len(result)
+                    result.append(combined)
+                result[merged[pair_id]]["contours"].extend(copy.deepcopy(item["contours"]))
+                old_to_new[old_index] = merged[pair_id]
+                continue
+            restored = _copy_items([item])[0]
+            if restored.pop("_packing_pair_image", False):
+                restored.pop("group_path", None)
+            old_to_new[old_index] = len(result)
+            result.append(restored)
+        selected = sorted({old_to_new[index] for index in selection if index in old_to_new})
+        return result, selected
+
+    def source_indices(indices):
+        mapped = {pairing["fragment_sources"].get(index, index) for index in indices}
+        return sorted(mapped)
+
+    items, selection, details = plan
+    items, selection = restore_items(items, selection)
+    for unit in details.get("units", []):
+        unit["source_indices"] = source_indices(unit["source_indices"])
+    for unplaced in details.get("unplaced", []):
+        unplaced["source_indices"] = source_indices(unplaced["source_indices"])
+    for page in details.get("new_pages", []):
+        page["items"], page["selection"] = restore_items(page["items"], page["selection"])
+    return items, selection, details
 
 
 def _anchor_values(path, sampled):
@@ -341,9 +472,11 @@ def pack_items(items, metadata, indices, parameters):
     time_limit = finite_number(parameters.get("time_limit_seconds", 12), "time_limit_seconds", .05, 60)
     if type(parameters.get("new_page_for_unplaced", False)) is not bool:
         raise ValueError("new_page_for_unplaced must be a boolean.")
+    items, indices, parameters, pairing = _prepare_packing_source(items, indices, parameters)
     deadline = time.monotonic()+time_limit
     if not parameters.get("new_page_for_unplaced", False):
-        return _pack_single(items, metadata, indices, parameters, deadline=deadline)
+        return _restore_packing_plan(
+            _pack_single(items, metadata, indices, parameters, deadline=deadline), pairing)
 
     first_parameters = {**parameters, "fill": False, "new_page_for_unplaced": False}
     result, selection, first = _pack_single(items, metadata, indices, first_parameters,
@@ -448,4 +581,5 @@ def pack_items(items, metadata, indices, parameters):
         "units": [{"source_indices": unit, "requested": count,
                    "requested_placed": count-missing, "copies": count-missing+extra_copies[index]}
                   for index, (unit, count, missing) in enumerate(zip(units, requested, remaining))]}
-    return page_results[0]["items"], page_results[0]["selection"], details
+    return _restore_packing_plan(
+        (page_results[0]["items"], page_results[0]["selection"], details), pairing)

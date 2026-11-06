@@ -4,21 +4,82 @@ from __future__ import annotations
 
 import copy
 import re
+import time
 import weakref
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QLineF, QObject, QPointF, QRectF, Qt, QTemporaryDir, Signal, Slot
-from PySide6.QtGui import QColor, QPainter, QPen, QPixmap, QPalette
+from PySide6.QtCore import QLineF, QPointF, QRectF, Qt, QTemporaryDir, QTimer
+from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap, QPalette
 from PySide6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QDialog,
-    QDialogButtonBox, QFormLayout, QHBoxLayout, QLabel, QMessageBox, QPushButton,
-    QScrollArea, QVBoxLayout, QWidget)
+    QDialogButtonBox, QFormLayout, QHBoxLayout, QLabel, QMessageBox, QProgressBar,
+    QPushButton, QScrollArea, QVBoxLayout, QWidget)
 
 from .editor_widgets import SafeDoubleSpinBox, SafeSpinBox
 from .grouping import selection_units as group_units
 from .i18n import tr
 from .view_constants import (ACCENT, GRID_MAJOR, PAGE_HEIGHT_MM, PAGE_MARGIN,
     PAGE_WIDTH_MM, PAPER)
+
+
+def _render_packing_preview(items, metadata, filename):
+    import base64
+
+    from .artwork import contour_path, draw_printed_item
+    from .layers import cuttable
+    from .printing import draw_registration_marks
+    from .raster_import import decode_embedded_image
+
+    image = QImage(360, 360, QImage.Format.Format_RGB32)
+    image.fill(Qt.GlobalColor.white)
+    painter = QPainter(image)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+    painter.scale(1.2, 1.2)
+    decoded = {}
+    try:
+        for item in items:
+            embedded = item.get("image_data")
+            source = None
+            placeholder = False
+            if embedded is not None:
+                cached = decoded.get(embedded)
+                if cached is None:
+                    header = base64.b64decode(embedded[:44], validate=True)
+                    if header.startswith(b"qoif"):
+                        width = int.from_bytes(header[4:8], "big")
+                        height = int.from_bytes(header[8:12], "big")
+                    elif header.startswith(b"\x89PNG\r\n\x1a\n") and header[12:16] == b"IHDR":
+                        width = int.from_bytes(header[16:20], "big")
+                        height = int.from_bytes(header[20:24], "big")
+                    else:
+                        width = height = 0
+                    if width*height > 16_000_000:
+                        raise ValueError(tr("圖片尺寸超過 1600 萬像素"))
+                    cached = (width, height,
+                              decode_embedded_image(embedded) if width*height <= 1_000_000 else None)
+                    decoded[embedded] = cached
+                width, height, source = cached
+                if source is None and width*height > 1_000_000:
+                    painter.fillPath(contour_path(item.get("contours", [])),
+                                     QColor("#edf0f4"))
+                    placeholder = True
+            if not placeholder:
+                draw_printed_item(painter, item, image=source)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        pen = QPen(QColor("#e5484d"), 1)
+        pen.setCosmetic(True)
+        painter.setPen(pen)
+        for item in items:
+            if cuttable(item):
+                painter.drawPath(contour_path(item["contours"]))
+        registration = metadata.get("print_cut", {})
+        if registration.get("enabled") and registration.get("bounds"):
+            draw_registration_marks(painter, registration["bounds"], registration)
+    finally:
+        painter.end()
+    if image.isNull() or not image.save(str(filename), "PNG"):
+        raise OSError(tr("無法儲存排版預覽圖。"))
 
 
 class PreviewDialog(QDialog):
@@ -117,18 +178,12 @@ class BleedDialog(QDialog):
             QMessageBox.warning(self, tr("設定列印出血"), str(error))
 
 
-class _PackingPreviewSignals(QObject):
-    nestingPreview = Signal(int, object, object)
-
-
 class PackingDialog(QDialog):
 
     def __init__(self, owner, indices):
         super().__init__(owner)
         self.owner, self.indices, self.plan = owner, indices, None
         self._preview_state = {"generation": 0, "closed": False}
-        self._nesting_preview_signals = _PackingPreviewSignals()
-        self._nesting_preview_signals.nestingPreview.connect(self._show_nesting_preview)
         preview_state = self._preview_state
         self.finished.connect(lambda *_args, state=preview_state: _close_packing_preview(state))
         self.destroyed.connect(lambda *_args, state=preview_state: _close_packing_preview(state))
@@ -138,6 +193,14 @@ class PackingDialog(QDialog):
         self.fill_check = QCheckBox(tr("繼續填滿剩餘範圍"))
         self.rotate_check = QCheckBox(tr("允許旋轉"))
         self.shape_check = QCheckBox(tr("依實際輪廓排列"))
+        try:
+            from .nesting_engine import nesting_available
+            engine_available = nesting_available()
+        except (ImportError, OSError, RuntimeError):
+            engine_available = False
+        if engine_available:
+            self.rotate_check.setChecked(True)
+            self.shape_check.setChecked(True)
         self.pages_check = QCheckBox(tr("放不下的份數另開新分頁"))
         self.rotation_spin = SafeSpinBox()
         self.rotation_spin.setRange(5, 90)
@@ -175,10 +238,20 @@ class PackingDialog(QDialog):
         self.summary = QLabel()
         self.summary.setWordWrap(True)
         self.summary.hide()
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.hide()
+        self.progress_timer = QTimer(self)
+        self.progress_timer.setInterval(100)
+        self.progress_timer.timeout.connect(self._update_progress)
+        self._progress_started = None
+        self._progress_limit = None
         self.directory = QTemporaryDir()
         layout = QVBoxLayout(self)
         layout.addLayout(form)
         layout.addWidget(self.preview_button)
+        layout.addWidget(self.progress_bar)
         layout.addWidget(self.preview_label)
         layout.addWidget(self.summary)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
@@ -196,8 +269,10 @@ class PackingDialog(QDialog):
             check.toggled.connect(self.invalidate)
         self.rotate_check.toggled.connect(self._rotation_controls_changed)
         self.shape_check.toggled.connect(self._rotation_controls_changed)
+        self._rotation_controls_changed()
 
     def invalidate(self, *_args):
+        self._stop_progress()
         self._preview_state["generation"] += 1
         self.plan = None
         self.preview_button.setEnabled(True)
@@ -221,30 +296,19 @@ class PackingDialog(QDialog):
                 "fill": self.fill_check.isChecked()}
 
     def build_items(self):
-        from .packing import pack_items
         if self.plan is None:
+            from .packing import pack_items
             self.plan = pack_items(self.owner.items, self.owner.metadata, self.indices,
-                                       self._parameters())
+                                   self._parameters())
         return self.plan
 
-    @Slot(int, object, object)
-    def _show_nesting_preview(self, generation, plan, metadata):
+    def _present_plan(self, generation, plan, preview_path):
         if (self._preview_state["closed"]
                 or self._preview_state["generation"] != generation):
             return
-        self._present_plan(generation, plan, metadata, searching=True)
-
-    def _present_plan(self, generation, plan, metadata, *, searching):
-        if (self._preview_state["closed"]
-                or self._preview_state["generation"] != generation):
-            return
-        from .editor_actions import render_preview
         try:
             items, _, details = plan
-            path = Path(self.directory.path()) / "preview.png"
-            render_preview(items, metadata, path)
-            self.preview_label.setPixmap(QPixmap(str(path)).scaled(360, 360,
-                Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+            self.preview_label.setPixmap(QPixmap(str(preview_path)))
             text = tr("共 {copies} 組副本；{objects} 個物件。", copies=details["copies"], objects=len(items))
             text += " " + tr("紙張使用率 {percent:.1f}%。", percent=details["paper_utilization_percent"])
             if details["page_count"] > 1:
@@ -255,34 +319,66 @@ class PackingDialog(QDialog):
                                  objects="、".join(names[:8]))
             if details["limit_reached"]:
                 text += " " + tr("已達本次排版上限。")
-            if searching:
-                text += " " + tr("排版中…")
         except (ValueError, OSError) as error:
+            self._stop_progress()
             self.plan = None
             self.apply_button.setEnabled(False)
-            if not searching:
-                self.preview_button.setEnabled(True)
+            self.preview_button.setEnabled(True)
             QMessageBox.warning(self, tr("自動排版"), str(error))
             return
         self.plan = plan
         self.summary.setText(text)
         self.summary.show()
-        self.preview_button.setEnabled(not searching)
-        self.apply_button.setEnabled(True)
+        self._stop_progress(completed=True)
+        self.preview_button.setEnabled(True)
+        self.apply_button.setEnabled(details["copies"] > 0)
+
+    def _start_progress(self, limit_seconds=None):
+        self._progress_started = time.monotonic()
+        self._progress_limit = limit_seconds
+        if limit_seconds is None:
+            self.progress_bar.setRange(0, 0)
+            self.progress_bar.setFormat(tr("排版中…"))
+        else:
+            self.progress_bar.setRange(0, 100)
+            self._update_progress()
+        self.progress_bar.show()
+        self.progress_timer.start()
+        self._update_progress()
+
+    def _update_progress(self):
+        if self._progress_limit is None or self._progress_started is None:
+            return
+        elapsed = time.monotonic()-self._progress_started
+        self.progress_bar.setValue(min(99, int(100*elapsed/self._progress_limit)))
+        self.progress_bar.setFormat(tr("已過 {elapsed:.1f} 秒 / {limit:.1f} 秒",
+                                      elapsed=elapsed, limit=self._progress_limit))
+
+    def _stop_progress(self, completed=False):
+        self.progress_timer.stop()
+        if completed and self._progress_limit is not None:
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(100)
+        self.progress_bar.hide()
+        self._progress_started = None
+        self._progress_limit = None
 
     def preview(self):
         if self._preview_state["closed"]:
             return
+        from .nesting_engine import nesting_available, pack_with_nesting
         from .packing import pack_items
         state = self._preview_state
         state["generation"] += 1
         generation = state["generation"]
         self.plan = None
+        source_items = self.owner.items
+        source_metadata = self.owner.metadata
         try:
-            items = copy.deepcopy(self.owner.items)
-            metadata = copy.deepcopy(self.owner.metadata)
             indices = list(self.indices)
-            parameters = copy.deepcopy(self._parameters(items, indices))
+            parameters = copy.deepcopy(self._parameters(source_items, indices))
+            use_nesting = (not parameters["new_page_for_unplaced"]
+                           and nesting_available())
         except (ValueError, OSError) as error:
             self.apply_button.setEnabled(False)
             QMessageBox.warning(self, tr("自動排版"), str(error))
@@ -299,12 +395,23 @@ class PackingDialog(QDialog):
             dialog = current_dialog()
             if dialog is None:
                 return
-            dialog._present_plan(generation, plan, metadata, searching=False)
+            plan, preview_path = plan
+            if plan is None:
+                dialog.plan = None
+                dialog._stop_progress(completed=True)
+                dialog.preview_label.clear()
+                dialog.summary.setText(tr("新引擎未找到可套用的排版結果。"))
+                dialog.summary.show()
+                dialog.preview_button.setEnabled(True)
+                dialog.apply_button.setEnabled(False)
+                return
+            dialog._present_plan(generation, plan, preview_path)
 
         def failed(error):
             dialog = current_dialog()
             if dialog is None:
                 return
+            dialog._stop_progress()
             dialog.plan = None
             dialog.apply_button.setEnabled(False)
             dialog.preview_button.setEnabled(True)
@@ -312,36 +419,32 @@ class PackingDialog(QDialog):
 
         self.preview_button.setEnabled(False)
         self.apply_button.setEnabled(False)
+        self._start_progress(parameters["time_limit_seconds"] if use_nesting else None)
         self.summary.setText(tr("排版中…"))
         self.summary.show()
 
         def pack():
-            first_plan = pack_items(items, metadata, indices, parameters)
-            if parameters["new_page_for_unplaced"]:
-                return first_plan
-            try:
-                from .nesting_engine import (layout_is_better, nesting_available,
-                                             pack_with_nesting)
-                if (not nesting_available()
-                        or parameters["time_limit_seconds"] < 2):
-                    return first_plan
-                preview_signal.nestingPreview.emit(generation, first_plan, metadata)
-                candidate = pack_with_nesting(items, metadata, indices, parameters)
-                if (candidate is not None
-                        and layout_is_better(candidate, first_plan, metadata, parameters)):
-                    return candidate
-            except (ImportError, OSError, RuntimeError, TypeError, ValueError):
-                return first_plan
-            return first_plan
+            items = copy.deepcopy(source_items)
+            metadata = copy.deepcopy(source_metadata)
+            if use_nesting:
+                plan = pack_with_nesting(items, metadata, indices, parameters)
+            else:
+                plan = pack_items(items, metadata, indices, parameters)
+            if plan is None:
+                return None, None
+            preview_path = Path(self.directory.path()) / f"preview-{generation}.png"
+            _render_packing_preview(plan[0], metadata, preview_path)
+            return plan, preview_path
 
-        preview_signal = self._nesting_preview_signals
         self.owner._dispatch(pack, succeeded, failed)
 
     def close(self):
+        self._stop_progress()
         _close_packing_preview(self._preview_state)
         return super().close()
 
     def closeEvent(self, event):
+        self._stop_progress()
         _close_packing_preview(self._preview_state)
         super().closeEvent(event)
 

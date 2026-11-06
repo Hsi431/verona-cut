@@ -72,7 +72,24 @@ class NestingEngineTests(unittest.TestCase):
                 with patch.object(window, "_confirm_unsaved_changes", return_value="discard"):
                     window.close()
 
-    def test_window_can_apply_first_preview_while_nesting_is_still_running(self):
+    def test_build_items_keeps_synchronous_fallback_without_a_preview(self):
+        window = VeronaWindow()
+        window.items = [rectangle("sticker", 12, 10)]
+        window.metadata = {}
+        dialog = PackingDialog(window, [0])
+        try:
+            try:
+                plan = dialog.build_items()
+            except (ValueError, OSError) as error:
+                self.fail(f"build_items did not keep synchronous packing: {error}")
+            self.assertIs(plan, dialog.plan)
+            self.assertEqual(plan[2]["copies"], 1)
+        finally:
+            dialog.close()
+            with patch.object(window, "_confirm_unsaved_changes", return_value="discard"):
+                window.close()
+
+    def test_window_cannot_apply_nesting_preview_until_it_finishes(self):
         window = VeronaWindow()
         window.items = [rectangle("sticker", 12, 10)]
         window.metadata = {}
@@ -80,11 +97,14 @@ class NestingEngineTests(unittest.TestCase):
         window.select_many([0])
         started, release, returned = threading.Event(), threading.Event(), threading.Event()
 
-        def blocked_nesting(*_args, **_kwargs):
+        def blocked_nesting(items, *_args, **_kwargs):
             started.set()
             release.wait(2)
             returned.set()
-            return None
+            return (items, [0], {
+                "copies": 1, "paper_utilization_percent": 1.0, "page_count": 1,
+                "unplaced_count": 0, "unplaced": [], "limit_reached": False,
+            })
 
         with patch("verona.nesting_engine.nesting_available", return_value=True), \
                 patch("verona.nesting_engine.pack_with_nesting", side_effect=blocked_nesting):
@@ -92,8 +112,14 @@ class NestingEngineTests(unittest.TestCase):
                 dialog.time_limit_spin.setValue(2)
                 dialog.preview()
                 self._pump_until(lambda: started.is_set())
-                self._pump_until(lambda: dialog.apply_button.isEnabled())
                 self.assertIn(tr("排版中…"), dialog.summary.text())
+                self.assertIsNone(dialog.plan)
+                self.assertFalse(dialog.apply_button.isEnabled())
+                dialog.apply_button.click()
+                self.assertFalse(dialog.apply_button.isEnabled())
+                release.set()
+                self._pump_until(lambda: returned.is_set())
+                self._pump_until(lambda: dialog.apply_button.isEnabled())
                 self.assertIsNotNone(dialog.plan)
                 dialog.apply_button.click()
                 return QDialog.DialogCode.Accepted
@@ -109,7 +135,7 @@ class NestingEngineTests(unittest.TestCase):
                 with patch.object(window, "_confirm_unsaved_changes", return_value="discard"):
                     window.close()
 
-    def test_setting_change_discards_late_nesting_result_after_first_preview(self):
+    def test_setting_change_discards_late_nesting_result(self):
         window, dialog = VeronaWindow(), None
         window.items = [rectangle("sticker", 12, 10)]
         window.metadata = {}
@@ -129,8 +155,8 @@ class NestingEngineTests(unittest.TestCase):
                 dialog.time_limit_spin.setValue(2)
                 dialog.preview()
                 self._pump_until(lambda: started.is_set())
-                self._pump_until(lambda: dialog.apply_button.isEnabled())
-                self.assertIsNotNone(dialog.plan)
+                self.assertIsNone(dialog.plan)
+                self.assertFalse(dialog.apply_button.isEnabled())
                 dialog.gap_spin.setValue(3)
                 self.assertIsNone(dialog.plan)
                 self.assertFalse(dialog.apply_button.isEnabled())

@@ -17,6 +17,11 @@ from verona.ui import PackingDialog, VeronaWindow
 
 
 class PackingPreviewAsyncTests(unittest.TestCase):
+    def setUp(self):
+        engine = patch("verona.nesting_engine.nesting_available", return_value=False)
+        engine.start()
+        self.addCleanup(engine.stop)
+
     @classmethod
     def setUpClass(cls):
         cls.settings = QTemporaryDir()

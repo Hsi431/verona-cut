@@ -167,6 +167,9 @@ class PackingTests(unittest.TestCase):
         self.assertEqual(items, original)
 
     def test_gui_applies_exact_cached_preview_and_undoes_as_one_step(self):
+        engine = patch("verona.nesting_engine.nesting_available", return_value=False)
+        engine.start()
+        self.addCleanup(engine.stop)
         window = VeronaWindow()
         window.items = [rectangle(), rectangle(x=80, y=80, width=10, height=30)]
         window.refresh_all()
