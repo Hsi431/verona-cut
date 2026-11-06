@@ -40,6 +40,24 @@ def document(content):
     return FILE_HEADER + record(1000, 3, 1) + content + record(1000, 4, 1)
 
 
+def write_large_document(path, size):
+    points = [(0, 0, 16), (10, 0, 1)]
+    suffix = vector(points) + record(1000, 4, 1)
+    payload_size = size - len(FILE_HEADER) - len(record(1000, 3, 1)) - 32 - len(suffix)
+    header = (FILE_HEADER + record(1000, 3, 1)
+              + struct.pack("<8I", 0x1E4E9CAD, 0, 500, payload_size, 99, 0, 0, 0))
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        with archive.open("CDOC", "w") as member:
+            member.write(header)
+            block = b"\0" * (1024 * 1024)
+            remaining = payload_size
+            while remaining:
+                chunk = block[:min(remaining, len(block))]
+                member.write(chunk)
+                remaining -= len(chunk)
+            member.write(suffix)
+
+
 class NativeDocumentTests(unittest.TestCase):
     def load(self, data, preview=None):
         with tempfile.TemporaryDirectory() as directory:
@@ -157,6 +175,17 @@ class NativeDocumentTests(unittest.TestCase):
         for data in malformed:
             with self.subTest(length=len(data)), self.assertRaises(ValueError):
                 self.load(data)
+
+    def test_document_size_limit_accepts_over_32_mib_and_rejects_over_128_mib(self):
+        with tempfile.TemporaryDirectory(prefix="verona-cand-limit-") as directory:
+            accepted = Path(directory) / "over-old-limit.lds"
+            oversized = Path(directory) / "over-new-limit.lds"
+            write_large_document(accepted, 32 * 1024 * 1024 + 1)
+            write_large_document(oversized, 128 * 1024 * 1024 + 1)
+
+            self.assertEqual(len(load_lds(accepted).items), 1)
+            with self.assertRaisesRegex(ValueError, "oversized CDOC"):
+                load_lds(oversized)
 
     def test_hidden_layers_fail_instead_of_importing_hidden_cut_geometry(self):
         layers = b"\xef\xbb\xbf[layers]\nLayerCount=1\nL000.hidden=1\n"
