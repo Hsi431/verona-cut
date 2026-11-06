@@ -11,6 +11,9 @@ licenses of its dependencies or grant rights to imported artwork.
 | [SciPy](https://github.com/scipy/scipy/blob/main/LICENSE.txt) | Printed bleed color extension | BSD terms plus bundled component notices |
 | [PyUSB](https://github.com/pyusb/pyusb/blob/master/LICENSE) | Experimental USB transport | BSD-3-Clause |
 | [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk/blob/main/LICENSE) | Optional local automation | MIT |
+| [spyrrow 0.9.0](https://github.com/PaulDL-RS/spyrrow/tree/v0.9.0) | Bundled strip nesting engine | MIT; vendored wheel and full license in `vendor/spyrrow/` |
+| [Sparrow `881cdcb`](https://github.com/JeroenGar/sparrow/tree/881cdcbdf492ca42ba5413954ea6e41889a3becd) | Nesting search and collision tracking used by spyrrow | MIT; source patch and full license in `vendor/spyrrow/` |
+| [jagua-rs 0.7.0](https://github.com/JeroenGar/jagua-rs/tree/0.7.0) | Geometry and keep-out collision handling used by spyrrow | MPL-2.0; modified; source patch and full license in `vendor/spyrrow/` |
 
 The application imports QtCore, QtGui, QtWidgets, QtNetwork, QtPrintSupport,
 QtPdf and QtSvg; tests also use QtTest. [Qt PDF](https://doc.qt.io/qt-6.10/qtpdf-index.html#licenses-and-attributions)

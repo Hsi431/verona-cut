@@ -1,0 +1,151 @@
+diff --git a/jagua-rs/src/probs/spp/entities/problem.rs b/jagua-rs/src/probs/spp/entities/problem.rs
+index 6fd95e7..c973493 100644
+--- a/jagua-rs/src/probs/spp/entities/problem.rs
++++ b/jagua-rs/src/probs/spp/entities/problem.rs
+@@ -18,8 +18,8 @@ pub struct SPProblem {
+ impl SPProblem {
+     pub fn new(instance: SPInstance) -> Self {
+         let item_demand_qtys = instance.items.iter().map(|(_, qty)| *qty).collect_vec();
+-        let strip = instance.base_strip;
+-        let layout = Layout::new(strip.into());
++        let strip = instance.base_strip.clone();
++        let layout = Layout::new(strip.clone().into());
+ 
+         Self {
+             instance,
+@@ -31,8 +31,10 @@ impl SPProblem {
+ 
+     /// Modifies the width of the strip in the back, keeping the front fixed.
+     pub fn change_strip_width(&mut self, new_width: f32) {
+-        self.strip.set_width(new_width);
+-        self.layout.swap_container(self.strip.into());
++        let mut strip = self.strip.clone();
++        strip.set_width(new_width);
++        self.layout.swap_container(strip.clone().into());
++        self.strip = strip;
+     }
+ 
+     /// Shrinks the strip to the minimum width that fits all items.
+@@ -79,7 +81,7 @@ impl SPProblem {
+     pub fn save(&self) -> SPSolution {
+         let solution = SPSolution {
+             layout_snapshot: self.layout.save(),
+-            strip: self.strip,
++            strip: self.strip.clone(),
+             time_stamp: Instant::now(),
+         };
+ 
+@@ -96,7 +98,7 @@ impl SPProblem {
+         } else {
+             // the strip has changed, rebuild the layout
+             self.layout = Layout::from_snapshot(&solution.layout_snapshot);
+-            self.strip = solution.strip;
++            self.strip = solution.strip.clone();
+         }
+ 
+         //Restore the item demands
+diff --git a/jagua-rs/src/probs/spp/entities/strip.rs b/jagua-rs/src/probs/spp/entities/strip.rs
+index 9a107ea..6b14ef7 100644
+--- a/jagua-rs/src/probs/spp/entities/strip.rs
++++ b/jagua-rs/src/probs/spp/entities/strip.rs
+@@ -1,17 +1,18 @@
+ use crate::collision_detection::CDEConfig;
+ use crate::entities::Container;
+-use crate::geometry::primitives::{Rect, SPolygon};
+-use crate::geometry::shape_modification::{ShapeModifyConfig, ShapeModifyMode};
+-use crate::geometry::{DTransformation, OriginalShape};
++use crate::geometry::shape_modification::ShapeModifyConfig;
++use crate::io::ext_repr::{ExtContainer, ExtQualityZone, ExtShape, ExtSPolygon};
++use crate::io::import::Importer;
+ use anyhow::{Result, ensure};
+ 
+-#[derive(Clone, Debug, Copy, PartialEq)]
++#[derive(Clone, Debug, PartialEq)]
+ /// Represents a rectangular container with fixed height and variable width.
+ pub struct Strip {
+     pub fixed_height: f32,
+     pub cde_config: CDEConfig,
+     pub shape_modify_config: ShapeModifyConfig,
+     pub width: f32,
++    pub keepouts: Vec<Vec<(f32, f32)>>,
+ }
+ 
+ impl Strip {
+@@ -28,9 +29,15 @@ impl Strip {
+             cde_config,
+             shape_modify_config,
+             width,
++            keepouts: vec![],
+         })
+     }
+ 
++    pub fn with_keepouts(mut self, keepouts: Vec<Vec<(f32, f32)>>) -> Self {
++        self.keepouts = keepouts;
++        self
++    }
++
+     pub fn set_width(&mut self, width: f32) {
+         assert!(width > 0.0, "strip width must be positive");
+         self.width = width;
+@@ -40,17 +47,23 @@ impl Strip {
+ impl From<Strip> for Container {
+     fn from(s: Strip) -> Container {
+         let id = s.width.to_bits() as usize;
+-        Container::new(
+-            id,
+-            OriginalShape {
+-                shape: SPolygon::from(Rect::try_new(0.0, 0.0, s.width, s.fixed_height).unwrap()),
+-                pre_transform: DTransformation::empty(),
+-                modify_mode: ShapeModifyMode::Deflate,
+-                modify_config: s.shape_modify_config,
++        let importer = Importer {
++            shape_modify_config: s.shape_modify_config,
++            cde_config: s.cde_config,
++        };
++        let zones = s.keepouts.iter().map(|ring| ExtQualityZone {
++            quality: 0,
++            shape: ExtShape::SimplePolygon(ExtSPolygon(ring.clone())),
++        }).collect();
++        importer.import_container(&ExtContainer {
++            id: id as u64,
++            shape: ExtShape::Rectangle {
++                x_min: 0.0,
++                y_min: 0.0,
++                width: s.width,
++                height: s.fixed_height,
+             },
+-            vec![],
+-            s.cde_config,
+-        )
+-        .unwrap()
++            zones,
++        }).unwrap()
+     }
+ }
+diff --git a/jagua-rs/src/probs/spp/io/ext_repr.rs b/jagua-rs/src/probs/spp/io/ext_repr.rs
+index dba3242..5a794d6 100644
+--- a/jagua-rs/src/probs/spp/io/ext_repr.rs
++++ b/jagua-rs/src/probs/spp/io/ext_repr.rs
+@@ -11,6 +11,9 @@ pub struct ExtSPInstance {
+     pub items: Vec<ExtItem>,
+     /// Fixed height of the strip
+     pub strip_height: f32,
++    /// Static keep-out polygons inside the strip.
++    #[serde(default, skip_serializing_if = "Vec::is_empty")]
++    pub strip_holes: Vec<crate::io::ext_repr::ExtSPolygon>,
+ }
+ 
+ /// Item with a demand
+diff --git a/jagua-rs/src/probs/spp/io/import.rs b/jagua-rs/src/probs/spp/io/import.rs
+index 3c47c40..4a02aab 100644
+--- a/jagua-rs/src/probs/spp/io/import.rs
++++ b/jagua-rs/src/probs/spp/io/import.rs
+@@ -56,7 +56,7 @@ pub fn import_instance(importer: &Importer, ext_instance: &ExtSPInstance) -> Res
+             narrow_concavity_cutoff: None,
+         },
+         width,
+-    )?;
++    )?.with_keepouts(ext_instance.strip_holes.iter().map(|hole| hole.0.clone()).collect());
+ 
+     Ok(SPInstance::new(items, base_strip))
+ }

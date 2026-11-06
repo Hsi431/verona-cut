@@ -1,0 +1,75 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index eb70d50..402d12b 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -460,8 +460,6 @@ checksum = "92ecc6618181def0457392ccd0ee51198e065e016d1d527a7ac1b6dc7c1f09d2"
+ [[package]]
+ name = "jagua-rs"
+ version = "0.7.0"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "793f9477d88804ae70b0b980997dedace99a7397fc7274f8790e9a4156cd9936"
+ dependencies = [
+  "anyhow",
+  "document-features",
+@@ -975,7 +973,6 @@ checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
+ [[package]]
+ name = "sparrow"
+ version = "0.1.0"
+-source = "git+https://github.com/JeroenGar/sparrow.git?rev=881cdcbdf492ca42ba5413954ea6e41889a3becd#881cdcbdf492ca42ba5413954ea6e41889a3becd"
+ dependencies = [
+  "anyhow",
+  "clap",
+diff --git a/Cargo.toml b/Cargo.toml
+index c488d17..7e0115c 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -22,3 +22,9 @@ sparrow = { git = "https://github.com/JeroenGar/sparrow.git", rev = "881cdcbdf49
+     "only_final_svg",
+ ] }
+ num_cpus = "1.17.0"
++
++[patch.crates-io]
++jagua-rs = { path = "../jagua-rs/jagua-rs" }
++
++[patch."https://github.com/JeroenGar/sparrow.git"]
++sparrow = { path = "../sparrow" }
+diff --git a/src/lib.rs b/src/lib.rs
+index f708fa9..6bee6bf 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -402,6 +402,7 @@ struct StripPackingInstancePy {
+     pub name: String,
+     pub strip_height: f32,
+     pub items: Vec<ItemPy>,
++    pub holes: Vec<Vec<(f32, f32)>>,
+ }
+ 
+ impl From<StripPackingInstancePy> for ExtSPInstance {
+@@ -428,6 +429,7 @@ impl From<StripPackingInstancePy> for ExtSPInstance {
+         ExtSPInstance {
+             name: value.name,
+             strip_height: value.strip_height,
++            strip_holes: value.holes.into_iter().map(ExtSPolygon).collect(),
+             items,
+         }
+     }
+@@ -435,8 +437,10 @@ impl From<StripPackingInstancePy> for ExtSPInstance {
+ 
+ #[pymethods]
+ impl StripPackingInstancePy {
++    #[pyo3(signature = (name, strip_height, items, holes=None))]
+     #[new]
+-    fn new(name: String, strip_height: f32, items: Vec<ItemPy>) -> PyResult<Self> {
++    fn new(name: String, strip_height: f32, items: Vec<ItemPy>,
++           holes: Option<Vec<Vec<(f32, f32)>>>) -> PyResult<Self> {
+         let item_ids: Vec<&str> = items.iter().map(|i| i.id.as_str()).collect();
+         if !all_unique(&item_ids) {
+             let error_string = format!("The item ids are not uniques: {item_ids:#?}");
+@@ -446,6 +450,7 @@ impl StripPackingInstancePy {
+             name,
+             strip_height,
+             items,
++            holes: holes.unwrap_or_default(),
+         })
+     }
+ 

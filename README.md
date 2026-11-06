@@ -9,6 +9,9 @@ arrange a sheet, print at actual size, and send a cut over local Wi-Fi.
 No account, subscription or cloud upload. Installation downloads dependencies;
 normal editing and cutting work offline.
 
+The patched spyrrow nesting engine is built into Verona on Linux x86_64 with
+glibc 2.17 or newer; unsupported platforms use Verona's legacy layout.
+
 ![Verona workspace with document tabs, file and import controls at the upper left, zoom at the upper right, fixed top and left rulers, Insert menu, centered page, and right-panel output controls.](docs/assets/editor-dark.png)
 
 ## Features

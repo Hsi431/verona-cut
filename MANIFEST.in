@@ -6,3 +6,4 @@ recursive-include scripts *.py *.sh
 recursive-include tests *.py
 recursive-include examples *.svg *.png *.jdesign *.plt
 recursive-include src/verona *.py *.md *.svg
+recursive-include vendor *
