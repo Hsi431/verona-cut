@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Check the public tree or built archives without printing sensitive values."""
+import hashlib
 import ipaddress
 from pathlib import Path, PurePosixPath
 import re
@@ -23,6 +24,10 @@ PATTERNS = {
 IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 PRIVATE_NETWORKS = tuple(ipaddress.ip_network(value) for value in
                          ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
+PINNED_PUBLIC_WHEELS = {
+    "vendor/spyrrow/spyrrow-0.9.0-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl":
+        "8bc2dca6a53c4f0d52eaa6beff5ab75888d5f057e9ffce1f20a0c1613fece3e2",
+}
 
 
 def findings(name, data):
@@ -40,6 +45,8 @@ def findings(name, data):
     if path.suffix.lower() == ".png":
         if not ({"examples", "docs"} & set(path.parts)):
             yield "image outside documented asset directories"
+        return
+    if PINNED_PUBLIC_WHEELS.get(name) == hashlib.sha256(data).hexdigest():
         return
     try:
         text = data.decode("utf-8")
@@ -71,18 +78,18 @@ def entries(archive=None):
                 yield str(relative), b"", "symlink requires review"
             elif path.is_file():
                 yield str(relative), path.read_bytes(), None
-    elif zipfile.is_zipfile(archive):
-        with zipfile.ZipFile(archive) as package:
-            for name in package.namelist():
-                if not name.endswith("/"):
-                    yield name, package.read(name), None
-    else:
+    elif not zipfile.is_zipfile(archive) or tarfile.is_tarfile(archive):
         with tarfile.open(archive, "r:*") as package:
             for member in package.getmembers():
                 if member.isfile():
                     yield member.name, package.extractfile(member).read(), None
                 elif not member.isdir():
                     yield member.name, b"", "archive link requires review"
+    else:
+        with zipfile.ZipFile(archive) as package:
+            for name in package.namelist():
+                if not name.endswith("/"):
+                    yield name, package.read(name), None
 
 
 def main(argv=None):

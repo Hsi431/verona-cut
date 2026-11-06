@@ -12,6 +12,8 @@ hardware access are separate so a preview never needs a device connection.
 | `lds_export.py`, `native_images.py` | Bounded native CDOC/ZIP output and lossless QOI image encoding. |
 | `ui.py`, `node_editor.py`, `editor_widgets.py` | Desktop controls, editing tools and explicit print/send actions. |
 | `material_presets.py` | Validated named cut settings in the workspace preference store, with explicit undoable application. |
+| `packing.py`, `nesting_engine.py` | Automatic layout planning and result checks, with an optional contour-aware backend and a legacy fallback. |
+| `data_merge.py`, `path_ops.py`, `text_tool.py` | CSV-driven text batches, closed-vector operations and editable text outlines. |
 | `document_state.py` | Per-document contents, settings, selection, saved baseline and undo/redo history, without editor widgets. |
 | `recovery.py`, `workspace_storage.py` | Private atomic crash drafts, per-session leases and explicit startup recovery. |
 | `document_workspace.py` | Tab and file lifecycle, unsaved-change prompts and synchronization between document settings and controls. |
@@ -19,8 +21,16 @@ hardware access are separate so a preview never needs a device connection.
 | `canvas.py`, `view_constants.py`, `preview_dialogs.py` | Canvas, rulers, view defaults and bleed/packing/toolpath previews. |
 | `layers.py`, `layer_panel.py` | Shared visibility/output/locking rules and the object layer panel. |
 | `printing.py`, `artwork.py` | Physical-size print/PDF output and registration marks. |
+| `print_dialog.py`, `printer_options.py` | Paper, driver media/quality and ICC print settings. |
 | `cli.py` | Status query, validated dry-run export and explicit one-shot sending. |
 | `editor_bridge.py`, `editor_client.py`, `mcp_server.py` | Optional same-user editor automation with revision checks and prepared jobs. |
+
+The GUI uses the contour-aware backend only when the patched `spyrrow` wheel
+and its required holes API are available. The bundled wheel targets Linux
+x86_64, CPython 3.11+ and glibc 2.17 or newer; other platforms use the legacy
+planner. Requests to put overflow on new tabs also use the legacy planner.
+Both planners return a preview plan that Verona checks before it can be applied;
+search and document-size limits can leave requested copies unplaced.
 
 The encoder is shared across all interfaces. Document loading never sends
 hardware commands. The CLI does not accept raw PLT input.
@@ -28,7 +38,11 @@ hardware commands. The CLI does not accept raw PLT input.
 New `.jdesign` files use `format: "verona"`, version 1 and millimetres. The
 previous `juliet-design-linux` format identifier remains readable.
 
-LDS saves contain native `CDOC` geometry/images, a PNG `PREVIEW`, and a
+LDS import accepts supported single-layer native `CDOC` vector, logo and image
+objects plus registration references. Unknown object classes and hidden or
+multiple layers are rejected rather than silently discarded. Official
+Leonardo compatibility remains unverified. LDS saves contain native `CDOC`
+geometry/images, a PNG `PREVIEW`, and a
 `VERONA.json` editing document. The editing document uses the same JSON/geometry
 validation as `.jdesign` and is bound to the CDOC bytes by a SHA-256 digest.
 If another application changes CDOC, its stale Verona editing document is
@@ -37,7 +51,6 @@ pixels, names, node controls, groups, hidden/locked state and output settings.
 Native output contains visible print/cut content; printable vector styles and
 bleed are rendered at 300 DPI. Shared images use a single QOI definition.
 Image chunks follow the [QOI 1.0 specification](https://qoiformat.org/qoi-specification.pdf).
-Official Leonardo compatibility has not been verified.
 
 Saving builds and validates the archive before writing. The UI uses `file_io.py` to write a
 temporary sibling file and atomically replace the destination. Its first

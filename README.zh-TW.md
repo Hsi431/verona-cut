@@ -4,22 +4,23 @@
 
 ![Verona — Juliet 的原生 Linux 工作空間。](docs/assets/banner.png)
 
-為 **Siser Juliet** 打造的獨立 Linux 設計與切割程式。
-從匯入圖稿、編輯排版、原尺寸列印，到透過區域網路 Wi-Fi 傳送切割工作，都能在同一個桌面程式完成。
-不需帳號、訂閱或上傳雲端；安裝時會下載依賴套件，日常編輯與切割可離線使用。
+給 **Siser Juliet** 使用者的獨立 Linux 桌面工作空間。可在同一套程式中匯入與編輯圖稿、安排版面、以原尺寸列印，再透過本機 Wi-Fi 傳送切割工作。不需帳號、訂閱，也不會上傳雲端；安裝時會下載依賴套件，平常編輯與切割都能離線使用。
 
 ![Verona 工作區：文件分頁、左上方檔案與匯入工具、右上方縮放、固定於上方與左側的尺標、插入選單、置中的紙張，以及右側面板的輸出控制。](docs/assets/editor-dark-zh-TW.png)
 
 ## 功能
 
-- **圖稿與路徑：** 匯入 SVG 向量、點陣圖片及 PDF 頁面；可將一張或多張圖片拖入工作區，開啟匯入預覽；建立形狀與文字輪廓，編輯節點、曲線、遮罩與描邊輪廓。預覽中可用滾輪以游標為中心縮放、中鍵或空白鍵＋左鍵拖曳平移，並按「符合視窗」重設檢視。
-- **排版與圖層：** 移動、縮放、旋轉、鏡射、群組、對齊、分散與自動排版；分別控制物件的顯示、鎖定、前後順序、列印與切割。
+- **圖稿與路徑：** 匯入 SVG 向量、點陣圖片及 PDF 頁面；可將圖片拖入工作區開啟匯入預覽；建立形狀、加入可編輯文字並轉成輪廓，編輯節點、曲線與遮罩，也能從點陣圖片描出刀線。封閉向量圖形可合併、相減、取交集或排除重疊部分。圖片預覽中可用滾輪以游標為中心縮放、中鍵或空白鍵＋左鍵拖曳平移，並按「符合視窗」重設檢視。
+- **排版與圖層：** 移動、縮放、旋轉、鏡射、群組、對齊、分散，並使用智慧或尺標參考線貼齊邊緣。可預覽不同尺寸圖稿的自動排版，設定間距與 5° 至 90° 的旋轉步進（每次遞增 5°），依輪廓排列、填滿空位或保留空間；放不下的份數也能另開新分頁。Linux x86_64、glibc 2.17 以上提供內建輪廓排版引擎；其他平台使用舊版排法。預覽會列出未排入的份數。每個物件都能分別設定顯示、鎖定、前後順序、列印與切割。
+- **批次產生個人化圖稿：** 先預覽 CSV 或貼上的表格資料，再從同一份設計範本批次產生含個人化文字的圖稿。
 - **後編輯：** 不用重新匯入圖片，就能批次調整外側出血、內側補色、延伸邊緣色或使用單色出血，還原支援的原始 LDS 出血，或編輯單張圖片遮罩。「平滑切割線…」可預覽原線與結果，並以毫米最大偏移套用到所選向量或圖片切線；操作可復原。平滑可能減少短線段與轉向；尚無實體速度測試。
-- **列印：** 100% 原尺寸預覽與列印、匯出 PDF、設定 Print & Cut 定位標記，以及依量測結果調整切割對位。
+- **紙張與列印：** 選擇常用或自訂紙張尺寸與方向；以 100% 原尺寸預覽和列印、匯出 PDF、設定 Print & Cut 定位標記，並依量測結果調整對位。驅動程式有提供時，可選紙材與品質；也能選用 ICC 描述檔及演算意圖。
 - **保存設定：** 設計檔保存印表機與紙材偏好，以及切割次數、速度、壓力和工具設定；本機也會記住上次使用的列印偏好。
-- **工作介面：** 多文件分頁、復原／重做、可收合的右側區塊；滾輪不會誤改下拉選單或數值欄位。開啟設計時會符合紙張高度；按 `Ctrl+0` 可重新符合。檔案與匯入工具在左上方，縮放在右上方，與檔案工具分開；尺標固定於工作區上方與左側，不隨畫布捲動，刻度會跟隨視圖更新。底部狀態列保持精簡，只有傳送時顯示停止按鈕；切割預覽、匯出與傳送位於右側面板。主畫布按住 Ctrl／Alt 滾輪可依游標位置縮放，Shift 滾輪水平捲動。支援繁體中文、英文與亮暗主題。
+- **工作介面：** 多文件分頁、復原／重做、可收合的右側區塊；滾輪不會誤改下拉選單或數值欄位。開啟設計時會符合紙張高度；按 `Ctrl+0` 可重新符合。檔案與匯入工具在左上方，縮放在右上方，與檔案工具分開；尺標固定於工作區上方與左側，不隨畫布捲動，刻度會跟隨視圖更新。底部狀態列保持精簡，只有傳送時顯示停止按鈕；切割預覽、匯出與傳送位於右側面板。主畫布按住 Ctrl／Alt 滾輪可依游標位置縮放，Shift 滾輪水平捲動；Shift 拖曳可限制移動方向，Alt 拖曳可複製，按住 Shift 旋轉會以 15° 為間隔。支援繁體中文、英文與亮暗主題。
 - **桌面整合：** 雙擊檔案會交給既有工作視窗，已開啟的文件會切回原分頁；支援的檔案管理員可顯示 LDS 縮圖。
-- **本機工具：** 預設試跑的 CLI、唯讀切割機資訊、選用的 MCP 編輯介面，以及實驗性本機韌體工具。
+- **本機工具：** 預設試跑的 CLI、唯讀切割機資訊與實驗性本機韌體工具。選用的 MCP 協作介面可讓相容的助理查看、編輯目前開啟的設計，並準備列印或切割工作；送印與傳送仍須明確執行。
+
+![Verona 自動排版對話框，以 Print & Cut 紙張預覽測試素材排版結果與紙張使用率。](docs/assets/nesting-preview-zh-TW.png)
 
 ### 自動復原
 
@@ -64,27 +65,25 @@ sudo apt install git python3-venv libxcb-cursor0 libegl1 libopengl0 libxkbcommon
 
 git clone https://github.com/Hsi431/verona-cut.git
 cd verona-cut
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install .
-verona
+./install.sh
+./run.sh
 ~~~
 
-可從選單切換「語言」與「外觀」，也能直接指定啟動語言：
+可從選單切換「語言」與「外觀」，也能用啟動腳本指定介面語言：
 
 ~~~bash
-verona --lang zh_TW
-verona --lang en
+./run-zh-TW.sh
+./run-en.sh
 ~~~
 
 安裝桌面捷徑、檔案關聯與 LDS 縮圖：
 
 ~~~bash
-verona-desktop
+./.venv/bin/verona-desktop
 ~~~
 
 這只會調整目前使用者的桌面設定。首次安裝後請重新啟動檔案管理員，讓縮圖工具載入；
-縮圖功能已在 Nemo 驗證。從桌面開啟檔案，或執行 `verona --open <file>`，會使用既有工作視窗。
+縮圖功能已在 Nemo 驗證。從桌面開啟檔案，或執行 `./.venv/bin/verona --open <file>`，會使用既有工作視窗。
 
 ### 更新既有安裝
 
@@ -92,12 +91,11 @@ verona-desktop
 
 ~~~bash
 git pull --ff-only
-. .venv/bin/activate
-python -m pip install .
-verona
+./install.sh
+./run.sh
 ~~~
 
-若原先使用 `pip install .` 安裝，拉取更新後仍需重新安裝，程式才會載入新版。
+拉取更新後要重新安裝，Verona 與支援平台上的排版引擎才會一併更新。
 
 ## 日常操作
 
@@ -134,7 +132,7 @@ Verona 尚無經驗證的遠端緊急停止指令。
 ## 設計檔與設定保存
 
 - **`.jdesign`：** Verona 的可編輯設計格式。
-- **`.lds`：** 儲存支援的原生圖稿及 Verona 編輯資料。
+- **`.lds`：** 可匯入支援的單圖層 CDOC 向量、圖片與標誌物件；遇到不支援的物件類型或隱藏／多重圖層時會拒絕匯入，不會直接略過。儲存時會加入 Verona 編輯資料，但仍屬實驗性，尚未驗證與 Leonardo 的官方相容性。
   「另存設計…」（`Ctrl+Shift+S`）可選兩種格式；第一次覆寫既有 LDS 時，
   會把原檔保留為 `<filename>.lds.bak`。
 - **設定：** 列印偏好、切割設定與圖層狀態可在 Verona 儲存後重新開啟；
@@ -151,7 +149,7 @@ Verona 尚無經驗證的遠端緊急停止指令。
 不連接切割機，也能驗證並匯出工作：
 
 ~~~bash
-verona-cut cut examples/pen-calibration.jdesign --dry-run --output preview.plt
+./.venv/bin/verona-cut cut examples/pen-calibration.jdesign --dry-run --output preview.plt
 ~~~
 
 唯讀查詢，以及確認就緒後明確傳送一次：
@@ -159,11 +157,11 @@ verona-cut cut examples/pen-calibration.jdesign --dry-run --output preview.plt
 ~~~bash
 read -r -p 'Cutter IPv4 address: ' VERONA_HOST
 export VERONA_HOST
-verona-cut status --host "$VERONA_HOST"
-verona-cut status --host "$VERONA_HOST" --details
+./.venv/bin/verona-cut status --host "$VERONA_HOST"
+./.venv/bin/verona-cut status --host "$VERONA_HOST" --details
 
 # 裝好筆、確認設定與材料後，再傳送一次。
-verona-cut cut examples/pen-calibration.jdesign --host "$VERONA_HOST" --send
+./.venv/bin/verona-cut cut examples/pen-calibration.jdesign --host "$VERONA_HOST" --send
 ~~~
 
 `cut` 預設只試跑，接受 `.jdesign` 或單純路徑 SVG，不接受任意 PLT 指令。
@@ -180,7 +178,8 @@ TCP 預設連接埠為 8080，可用 `--port` 變更；不會掃描區域網路�
 開啟「說明 → 韌體更新（實驗功能）…」，或離線檢查本機檔案：
 
 ~~~bash
-verona-firmware inspect ./firmware.bin
+read -r -p '韌體檔案路徑: ' firmware_file
+./.venv/bin/verona-firmware inspect "$firmware_file"
 ~~~
 
 Verona 不附帶韌體，也不會自動下載。格式檢查不代表硬體相容，傳輸完成也不代表安裝成功。
@@ -197,7 +196,7 @@ python scripts/check-release.py
 ~~~
 
 測試使用合成資料、模擬物件與本機 socket，不會操作切割機或提交實際列印工作。
-選用的本機 MCP 服務可用 `verona-mcp` 啟動；操作方式見[使用指南](src/verona/agent-guide.md)。
+選用的本機 MCP 服務可用 `./.venv/bin/verona-mcp` 啟動；操作方式見[使用指南](src/verona/agent-guide.md)。
 
 [架構](docs/ARCHITECTURE.md) · [協定](docs/PROTOCOL.md) ·
 [Wi-Fi 診斷](docs/WIFI_DIAGNOSTICS.md) · [發布流程](docs/RELEASING.md)

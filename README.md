@@ -4,34 +4,44 @@
 
 ![Verona — A native Linux home for Juliet.](docs/assets/banner.png)
 
-An independent Linux workspace for **Siser Juliet**: import artwork, edit and
-arrange a sheet, print at actual size, and send a cut over local Wi-Fi.
-No account, subscription or cloud upload. Installation downloads dependencies;
-normal editing and cutting work offline.
-
-The patched spyrrow nesting engine is built into Verona on Linux x86_64 with
-glibc 2.17 or newer; unsupported platforms use Verona's legacy layout.
+An independent Linux desktop workspace for **Siser Juliet** owners. Import and
+edit artwork, arrange a sheet, print at actual size, and send cut jobs over
+local Wi-Fi from one application. No account, subscription, or cloud upload is
+needed. Installation downloads dependencies; everyday editing and cutting work
+offline.
 
 ![Verona workspace with document tabs, file and import controls at the upper left, zoom at the upper right, fixed top and left rulers, Insert menu, centered page, and right-panel output controls.](docs/assets/editor-dark.png)
 
 ## Features
 
 - **Artwork and paths:** import SVG vectors, raster images and PDF pages; drop
-  one or more images into the workspace to open the import preview; draw shapes and text
-  outlines; edit nodes, curves, masks and traced contours. In the image preview,
-  use the wheel to zoom around the pointer, middle-drag or Space+left-drag to pan,
-  and **Fit** to reset the view.
+  images into the workspace for an import preview; draw shapes, add editable
+  text and turn it into outlines, edit nodes, curves and masks, and trace raster
+  images into cutlines. Combine, subtract, intersect or exclude closed vector
+  shapes. In the image preview, wheel to zoom around the pointer, middle-drag or
+  Space+left-drag to pan, and **Fit** to reset the view.
 - **Layout and layers:** move, resize, rotate, mirror, group, align, distribute
-  and automatically arrange artwork. Control visibility, locking, stacking
+  and snap artwork to edges with smart or ruler guides. Preview an automatic
+  layout for mixed-size copies, choose the gap and a rotation step from 5° to 90°
+  in 5° increments,
+  use contour shapes, fill remaining space or leave it open, and put copies that do not fit
+  on new tabs. The built-in contour-aware engine is available on Linux x86_64
+  with glibc 2.17 or newer; other platforms use the legacy layout. The preview
+  reports copies it could not place. Control visibility, locking, stacking
   order, printing and cutting per object.
+- **Personalized batches:** preview CSV rows or pasted table data, then create batches
+  of personalized text artwork from one design template.
 - **Post-edit:** adjust outer bleed and inner fill on multiple existing images,
   extend edge colors or use a solid color, restore supported original LDS
   bleed, and edit individual image masks without reimporting. **Smooth cutlines…**
   previews the original against the result and applies a maximum millimetre offset
   to selected vector or image cutlines; the edit is undoable. Smoothing may reduce
   short segments and turns; no physical speed benchmark is available.
-- **Printing:** preview and print at 100% actual size, export PDF, configure
-  Print & Cut marks, and apply measured alignment corrections.
+- **Paper and printing:** choose common or custom paper sizes and orientation;
+  preview and print at 100% actual size, export PDF, configure Print & Cut
+  marks, and apply measured alignment corrections. Choose driver media and
+  quality when available, and optionally apply an ICC profile and rendering
+  intent.
 - **Saved settings:** retain printer/media preferences and cut passes,
   speed, force and tool settings in designs. Printer preferences also have
   a local last-used fallback.
@@ -43,12 +53,17 @@ glibc 2.17 or newer; unsupported platforms use Verona's legacy layout.
   place as the canvas scrolls, with ticks tracking the view. The bottom status
   strip is compact and shows Stop only while sending; cut preview/export/send
   are in the right panel. Ctrl/Alt+wheel zooms the main canvas around the
-  pointer; Shift+wheel scrolls horizontally. English/Traditional Chinese and
-  light/dark themes.
+  pointer; Shift+wheel scrolls horizontally. Shift-drag constrains movement,
+  Alt-drag duplicates, and Shift-rotation snaps to 15°. English/Traditional
+  Chinese and light/dark themes.
 - **Desktop integration:** double-click designs into the existing workspace,
   reuse tabs for already-open files, and show LDS thumbnails in supported file managers.
-- **Local tools:** a dry-run-first CLI, read-only cutter information,
-  an optional MCP editor bridge, and experimental local firmware tools.
+- **Local tools:** a dry-run-first CLI, read-only cutter information, and
+  experimental local firmware tools. An optional MCP bridge lets compatible
+  assistants inspect and edit the open design and prepare print or cut work;
+  printing and sending remain explicit actions.
+
+![Verona's automatic layout dialog showing test-fixture shapes arranged on a Print & Cut sheet and the paper-utilization summary.](docs/assets/nesting-preview.png)
 
 ### Automatic recovery
 
@@ -98,28 +113,26 @@ sudo apt install git python3-venv libxcb-cursor0 libegl1 libopengl0 libxkbcommon
 
 git clone https://github.com/Hsi431/verona-cut.git
 cd verona-cut
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install .
-verona
+./install.sh
+./run.sh
 ~~~
 
-Choose **Language** and **Appearance** from the menu, or launch directly in a language:
+Choose **Language** and **Appearance** from the menu, or launch with a language:
 
 ~~~bash
-verona --lang en
-verona --lang zh_TW
+./run-en.sh
+./run-zh-TW.sh
 ~~~
 
 To enable desktop launchers, file associations and LDS thumbnails:
 
 ~~~bash
-verona-desktop
+./.venv/bin/verona-desktop
 ~~~
 
 This configures only the current user. Restart the file manager after the
 first installation to reload thumbnailers; thumbnail support has been verified
-with Nemo. Opening files through the desktop or `verona --open <file>` shares
+with Nemo. Opening files through the desktop or `./.venv/bin/verona --open <file>` shares
 the existing workspace.
 
 ### Update an existing installation
@@ -128,12 +141,12 @@ Save your work and close Verona, then run from the repository:
 
 ~~~bash
 git pull --ff-only
-. .venv/bin/activate
-python -m pip install .
-verona
+./install.sh
+./run.sh
 ~~~
 
-Reinstalling is required after pulling changes when installed with `pip install .`.
+Reinstalling is required after pulling changes so Verona and the supported
+Linux nesting engine are updated together.
 
 ## Everyday workflow
 
@@ -196,7 +209,10 @@ verified remote emergency-stop command.
 ## Design files and settings
 
 - **`.jdesign`:** Verona's editable design format.
-- **`.lds`:** supported native artwork plus Verona editing data when saved.
+- **`.lds`:** imports supported single-layer CDOC vector, image and logo data;
+  unsupported object classes or hidden/multiple layers are rejected rather
+  than silently dropped. Saving adds Verona editing data, but remains
+  experimental and official Leonardo compatibility is unverified.
   **Save design as…** (`Ctrl+Shift+S`) offers both formats. The first overwrite
   of an existing LDS preserves its original as `<filename>.lds.bak`.
 - **Preferences:** print options, cut settings and layer state survive
@@ -214,7 +230,7 @@ current artwork and layer edits. See [native bleed details](docs/NATIVE_BLEED.md
 The CLI can validate and export a job without connecting to a cutter:
 
 ~~~bash
-verona-cut cut examples/pen-calibration.jdesign --dry-run --output preview.plt
+./.venv/bin/verona-cut cut examples/pen-calibration.jdesign --dry-run --output preview.plt
 ~~~
 
 For read-only checks and an explicitly authorized cut:
@@ -222,11 +238,11 @@ For read-only checks and an explicitly authorized cut:
 ~~~bash
 read -r -p 'Cutter IPv4 address: ' VERONA_HOST
 export VERONA_HOST
-verona-cut status --host "$VERONA_HOST"
-verona-cut status --host "$VERONA_HOST" --details
+./.venv/bin/verona-cut status --host "$VERONA_HOST"
+./.venv/bin/verona-cut status --host "$VERONA_HOST" --details
 
 # Load a pen, check the setup, then send once.
-verona-cut cut examples/pen-calibration.jdesign --host "$VERONA_HOST" --send
+./.venv/bin/verona-cut cut examples/pen-calibration.jdesign --host "$VERONA_HOST" --send
 ~~~
 
 `cut` defaults to a dry run and accepts `.jdesign` or plain path-based SVG,
@@ -244,7 +260,8 @@ port 8080, configurable with `--port`. There is no LAN scanning.
 Open **Help → Firmware update (experimental)…**, or inspect a local file offline:
 
 ~~~bash
-verona-firmware inspect ./firmware.bin
+read -r -p 'Local firmware file path: ' firmware_file
+./.venv/bin/verona-firmware inspect "$firmware_file"
 ~~~
 
 Verona does not bundle or automatically download firmware. Format checks do
@@ -264,7 +281,7 @@ python scripts/check-release.py
 
 Tests use synthetic fixtures, mocks and local sockets; they do not operate
 a cutter or submit real print jobs. Run the optional local MCP service with
-`verona-mcp`; see the [operating guide](src/verona/agent-guide.md).
+`./.venv/bin/verona-mcp`; see the [operating guide](src/verona/agent-guide.md).
 
 [Architecture](docs/ARCHITECTURE.md) · [Protocol](docs/PROTOCOL.md) ·
 [Wi-Fi diagnostics](docs/WIFI_DIAGNOSTICS.md) · [Release workflow](docs/RELEASING.md)
