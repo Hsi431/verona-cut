@@ -21,14 +21,16 @@ offline.
   shapes. In the image preview, wheel to zoom around the pointer, middle-drag or
   Space+left-drag to pan, and **Fit** to reset the view.
 - **Layout and layers:** move, resize, rotate, mirror, group, align, distribute
-  and snap artwork to edges with smart or ruler guides. Preview an automatic
-  layout for mixed-size copies, choose the gap and a rotation step from 5° to 90°
-  in 5° increments,
-  use contour shapes, fill remaining space or leave it open, and put copies that do not fit
-  on new tabs. The built-in contour-aware engine is available on Linux x86_64
-  with glibc 2.17 or newer; other platforms use the legacy layout. The preview
-  reports copies it could not place. Control visibility, locking, stacking
-  order, printing and cutting per object.
+  and snap artwork to edges with smart or ruler guides. Control visibility,
+  locking, stacking order, printing and cutting per object.
+- **Automatic layout:** the built-in engine packs the selected artwork by its
+  real outline at any angle, keeps clear of registration marks and anything else
+  on the sheet, and gathers the leftover space so you can decide what to do with
+  it. A progress bar runs while it works, and the preview lists any copies that
+  did not fit. You can also fill the remaining space, or send copies that do not
+  fit to new tabs (that option uses the legacy layout). The built-in engine
+  supports Linux x86_64 with glibc 2.17 or newer; other platforms use the legacy
+  layout.
 - **Personalized batches:** preview CSV rows or pasted table data, then create batches
   of personalized text artwork from one design template.
 - **Post-edit:** adjust outer bleed and inner fill on multiple existing images,
@@ -63,7 +65,7 @@ offline.
   assistants inspect and edit the open design and prepare print or cut work;
   printing and sending remain explicit actions.
 
-![Verona's automatic layout dialog showing test-fixture shapes arranged on a Print & Cut sheet and the paper-utilization summary.](docs/assets/nesting-preview.png)
+![Verona's automatic layout dialog: test shapes packed at different angles on a Print & Cut sheet, with the paper utilization shown below.](docs/assets/nesting-preview.png)
 
 ### Automatic recovery
 
@@ -145,8 +147,8 @@ git pull --ff-only
 ./run.sh
 ~~~
 
-Reinstalling is required after pulling changes so Verona and the supported
-Linux nesting engine are updated together.
+Reinstall after pulling changes so Verona and the built-in layout engine update
+together.
 
 ## Everyday workflow
 

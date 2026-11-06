@@ -198,6 +198,7 @@ class PackingDialog(QDialog):
             engine_available = nesting_available()
         except (ImportError, OSError, RuntimeError):
             engine_available = False
+        self._engine_available = engine_available
         if engine_available:
             self.rotate_check.setChecked(True)
             self.shape_check.setChecked(True)
@@ -269,6 +270,7 @@ class PackingDialog(QDialog):
             check.toggled.connect(self.invalidate)
         self.rotate_check.toggled.connect(self._rotation_controls_changed)
         self.shape_check.toggled.connect(self._rotation_controls_changed)
+        self.pages_check.toggled.connect(self._rotation_controls_changed)
         self._rotation_controls_changed()
 
     def invalidate(self, *_args):
@@ -281,7 +283,10 @@ class PackingDialog(QDialog):
         self.summary.show()
 
     def _rotation_controls_changed(self, *_args):
-        self.rotation_spin.setEnabled(self.rotate_check.isChecked() and self.shape_check.isChecked())
+        # The nesting engine rotates freely; the step only applies to the legacy layout.
+        legacy = not self._engine_available or self.pages_check.isChecked()
+        self.rotation_spin.setEnabled(legacy and self.rotate_check.isChecked()
+                                      and self.shape_check.isChecked())
 
     def _parameters(self, items=None, indices=None):
         items = self.owner.items if items is None else items
@@ -400,7 +405,7 @@ class PackingDialog(QDialog):
                 dialog.plan = None
                 dialog._stop_progress(completed=True)
                 dialog.preview_label.clear()
-                dialog.summary.setText(tr("新引擎未找到可套用的排版結果。"))
+                dialog.summary.setText(tr("這次排版找不到可套用的結果。"))
                 dialog.summary.show()
                 dialog.preview_button.setEnabled(True)
                 dialog.apply_button.setEnabled(False)
