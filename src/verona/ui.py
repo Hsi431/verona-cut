@@ -1912,6 +1912,7 @@ class VeronaWindow(DocumentWorkspace, QMainWindow):
         except (ValueError, OSError) as error:
             QMessageBox.warning(self, tr("自動排版"), str(error))
         finally:
+            dialog.close()
             dialog.deleteLater()
 
     def edit_nodes(self):

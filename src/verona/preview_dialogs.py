@@ -8,7 +8,7 @@ import weakref
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QLineF, QPointF, QRectF, Qt, QTemporaryDir
+from PySide6.QtCore import QLineF, QObject, QPointF, QRectF, Qt, QTemporaryDir, Signal, Slot
 from PySide6.QtGui import QColor, QPainter, QPen, QPixmap, QPalette
 from PySide6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QDialog,
     QDialogButtonBox, QFormLayout, QHBoxLayout, QLabel, QMessageBox, QPushButton,
@@ -117,11 +117,18 @@ class BleedDialog(QDialog):
             QMessageBox.warning(self, tr("設定列印出血"), str(error))
 
 
+class _PackingPreviewSignals(QObject):
+    nestingPreview = Signal(int, object, object)
+
+
 class PackingDialog(QDialog):
+
     def __init__(self, owner, indices):
         super().__init__(owner)
         self.owner, self.indices, self.plan = owner, indices, None
         self._preview_state = {"generation": 0, "closed": False}
+        self._nesting_preview_signals = _PackingPreviewSignals()
+        self._nesting_preview_signals.nestingPreview.connect(self._show_nesting_preview)
         preview_state = self._preview_state
         self.finished.connect(lambda *_args, state=preview_state: _close_packing_preview(state))
         self.destroyed.connect(lambda *_args, state=preview_state: _close_packing_preview(state))
@@ -220,11 +227,53 @@ class PackingDialog(QDialog):
                                        self._parameters())
         return self.plan
 
+    @Slot(int, object, object)
+    def _show_nesting_preview(self, generation, plan, metadata):
+        if (self._preview_state["closed"]
+                or self._preview_state["generation"] != generation):
+            return
+        self._present_plan(generation, plan, metadata, searching=True)
+
+    def _present_plan(self, generation, plan, metadata, *, searching):
+        if (self._preview_state["closed"]
+                or self._preview_state["generation"] != generation):
+            return
+        from .editor_actions import render_preview
+        try:
+            items, _, details = plan
+            path = Path(self.directory.path()) / "preview.png"
+            render_preview(items, metadata, path)
+            self.preview_label.setPixmap(QPixmap(str(path)).scaled(360, 360,
+                Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+            text = tr("共 {copies} 組副本；{objects} 個物件。", copies=details["copies"], objects=len(items))
+            text += " " + tr("紙張使用率 {percent:.1f}%。", percent=details["paper_utilization_percent"])
+            if details["page_count"] > 1:
+                text += " " + tr("共 {pages} 個分頁。", pages=details["page_count"])
+            if details["unplaced_count"]:
+                names = sorted({name for entry in details["unplaced"] for name in entry["objects"]})
+                text += " " + tr("放不下 {count} 份：{objects}", count=details["unplaced_count"],
+                                 objects="、".join(names[:8]))
+            if details["limit_reached"]:
+                text += " " + tr("已達本次排版上限。")
+            if searching:
+                text += " " + tr("排版中…")
+        except (ValueError, OSError) as error:
+            self.plan = None
+            self.apply_button.setEnabled(False)
+            if not searching:
+                self.preview_button.setEnabled(True)
+            QMessageBox.warning(self, tr("自動排版"), str(error))
+            return
+        self.plan = plan
+        self.summary.setText(text)
+        self.summary.show()
+        self.preview_button.setEnabled(not searching)
+        self.apply_button.setEnabled(True)
+
     def preview(self):
         if self._preview_state["closed"]:
             return
         from .packing import pack_items
-        from .editor_actions import render_preview
         state = self._preview_state
         state["generation"] += 1
         generation = state["generation"]
@@ -250,33 +299,7 @@ class PackingDialog(QDialog):
             dialog = current_dialog()
             if dialog is None:
                 return
-            try:
-                items, _, details = plan
-                path = Path(dialog.directory.path()) / "preview.png"
-                render_preview(items, metadata, path)
-                dialog.preview_label.setPixmap(QPixmap(str(path)).scaled(360, 360,
-                    Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
-                text = tr("共 {copies} 組副本；{objects} 個物件。", copies=details["copies"], objects=len(items))
-                text += " " + tr("紙張使用率 {percent:.1f}%。", percent=details["paper_utilization_percent"])
-                if details["page_count"] > 1:
-                    text += " " + tr("共 {pages} 個分頁。", pages=details["page_count"])
-                if details["unplaced_count"]:
-                    names = sorted({name for entry in details["unplaced"] for name in entry["objects"]})
-                    text += " " + tr("放不下 {count} 份：{objects}", count=details["unplaced_count"],
-                                     objects="、".join(names[:8]))
-                if details["limit_reached"]:
-                    text += " " + tr("已達本次排版上限。")
-            except (ValueError, OSError) as error:
-                dialog.plan = None
-                dialog.apply_button.setEnabled(False)
-                dialog.preview_button.setEnabled(True)
-                QMessageBox.warning(dialog, tr("自動排版"), str(error))
-                return
-            dialog.plan = plan
-            dialog.summary.setText(text)
-            dialog.summary.show()
-            dialog.preview_button.setEnabled(True)
-            dialog.apply_button.setEnabled(True)
+            dialog._present_plan(generation, plan, metadata, searching=False)
 
         def failed(error):
             dialog = current_dialog()
@@ -293,9 +316,30 @@ class PackingDialog(QDialog):
         self.summary.show()
 
         def pack():
-            return pack_items(items, metadata, indices, parameters)
+            first_plan = pack_items(items, metadata, indices, parameters)
+            if parameters["new_page_for_unplaced"]:
+                return first_plan
+            try:
+                from .nesting_engine import (layout_is_better, nesting_available,
+                                             pack_with_nesting)
+                if (not nesting_available()
+                        or parameters["time_limit_seconds"] < 2):
+                    return first_plan
+                preview_signal.nestingPreview.emit(generation, first_plan, metadata)
+                candidate = pack_with_nesting(items, metadata, indices, parameters)
+                if (candidate is not None
+                        and layout_is_better(candidate, first_plan, metadata, parameters)):
+                    return candidate
+            except (ImportError, OSError, RuntimeError, TypeError, ValueError):
+                return first_plan
+            return first_plan
 
+        preview_signal = self._nesting_preview_signals
         self.owner._dispatch(pack, succeeded, failed)
+
+    def close(self):
+        _close_packing_preview(self._preview_state)
+        return super().close()
 
     def closeEvent(self, event):
         _close_packing_preview(self._preview_state)

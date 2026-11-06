@@ -83,6 +83,14 @@ def _path_area(path):
     return area
 
 
+def _transform_placement(items, rotation, origin, x, y):
+    """Apply one normalized placement transform to a detached selection unit."""
+    transform = QTransform(rotation.m11(), rotation.m12(), rotation.m21(), rotation.m22(),
+                           x-origin.x(), y-origin.y())
+    for item in items:
+        _transform_item(item, transform)
+
+
 def _material_area(items):
     area = 0.0
     for item in items:
@@ -298,10 +306,7 @@ def _pack_single(items, metadata, indices, parameters, *, allow_partial=False,
         copies = _copy_items([items[i] for i in units[unit_id]])
         remap_group_ids(copies)
         rotation, origin = variant["rotation"], variant["origin"]
-        transform = QTransform(rotation.m11(), rotation.m12(), rotation.m21(), rotation.m22(),
-                               x-origin.x(), y-origin.y())
-        for item in copies:
-            _transform_item(item, transform)
+        _transform_placement(copies, rotation, origin, x, y)
         selection.extend(range(len(result), len(result)+len(copies)))
         result.extend(copies)
     usable_area = area.width()*area.height()
