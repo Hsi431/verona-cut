@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import copy
 import re
+import weakref
 from pathlib import Path
 from typing import Any
 
@@ -119,6 +121,10 @@ class PackingDialog(QDialog):
     def __init__(self, owner, indices):
         super().__init__(owner)
         self.owner, self.indices, self.plan = owner, indices, None
+        self._preview_state = {"generation": 0, "closed": False}
+        preview_state = self._preview_state
+        self.finished.connect(lambda *_args, state=preview_state: _close_packing_preview(state))
+        self.destroyed.connect(lambda *_args, state=preview_state: _close_packing_preview(state))
         self.setWindowTitle(tr("自動排版"))
         self.copies_spin = SafeSpinBox()
         self.copies_spin.setRange(1, 1000)
@@ -152,9 +158,9 @@ class PackingDialog(QDialog):
         form.addRow(self.shape_check)
         form.addRow(self.fill_check)
         form.addRow(self.pages_check)
-        preview = QPushButton(tr("預覽"))
-        preview.setToolTip(tr("先預覽排版，再套用；圖案維持原尺寸。"))
-        preview.clicked.connect(self.preview)
+        self.preview_button = QPushButton(tr("預覽"))
+        self.preview_button.setToolTip(tr("先預覽排版，再套用；圖案維持原尺寸。"))
+        self.preview_button.clicked.connect(self.preview)
         self.preview_label = QLabel(tr("尚未預覽"))
         self.preview_label.setMinimumSize(360, 360)
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -165,7 +171,7 @@ class PackingDialog(QDialog):
         self.directory = QTemporaryDir()
         layout = QVBoxLayout(self)
         layout.addLayout(form)
-        layout.addWidget(preview)
+        layout.addWidget(self.preview_button)
         layout.addWidget(self.preview_label)
         layout.addWidget(self.summary)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
@@ -185,7 +191,9 @@ class PackingDialog(QDialog):
         self.shape_check.toggled.connect(self._rotation_controls_changed)
 
     def invalidate(self, *_args):
+        self._preview_state["generation"] += 1
         self.plan = None
+        self.preview_button.setEnabled(True)
         self.apply_button.setEnabled(False)
         self.summary.setText(tr("設定已變更，請重新預覽。"))
         self.summary.show()
@@ -193,44 +201,111 @@ class PackingDialog(QDialog):
     def _rotation_controls_changed(self, *_args):
         self.rotation_spin.setEnabled(self.rotate_check.isChecked() and self.shape_check.isChecked())
 
+    def _parameters(self, items=None, indices=None):
+        items = self.owner.items if items is None else items
+        indices = self.indices if indices is None else indices
+        units = group_units(items, indices)
+        return {"copies_per_unit": [self.copies_spin.value()]*len(units),
+                "gap_mm": self.gap_spin.value(), "margin_mm": self.margin_spin.value(),
+                "allow_rotate": self.rotate_check.isChecked(), "shape_aware": self.shape_check.isChecked(),
+                "rotation_step_deg": self.rotation_spin.value(),
+                "time_limit_seconds": self.time_limit_spin.value(),
+                "new_page_for_unplaced": self.pages_check.isChecked(),
+                "fill": self.fill_check.isChecked()}
+
     def build_items(self):
         from .packing import pack_items
         if self.plan is None:
-            units = group_units(self.owner.items, self.indices)
             self.plan = pack_items(self.owner.items, self.owner.metadata, self.indices,
-                {"copies_per_unit": [self.copies_spin.value()]*len(units),
-                 "gap_mm": self.gap_spin.value(), "margin_mm": self.margin_spin.value(),
-                 "allow_rotate": self.rotate_check.isChecked(), "shape_aware": self.shape_check.isChecked(),
-                 "rotation_step_deg": self.rotation_spin.value(),
-                 "time_limit_seconds": self.time_limit_spin.value(),
-                 "new_page_for_unplaced": self.pages_check.isChecked(),
-                 "fill": self.fill_check.isChecked()})
+                                       self._parameters())
         return self.plan
 
     def preview(self):
+        if self._preview_state["closed"]:
+            return
+        from .packing import pack_items
         from .editor_actions import render_preview
+        state = self._preview_state
+        state["generation"] += 1
+        generation = state["generation"]
+        self.plan = None
         try:
-            items, _, details = self.build_items()
-            path = Path(self.directory.path()) / "preview.png"
-            render_preview(items, self.owner.metadata, path)
-            self.preview_label.setPixmap(QPixmap(str(path)).scaled(360, 360,
-                Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
-            text = tr("共 {copies} 組副本；{objects} 個物件。", copies=details["copies"], objects=len(items))
-            text += " " + tr("紙張使用率 {percent:.1f}%。", percent=details["paper_utilization_percent"])
-            if details["page_count"] > 1:
-                text += " " + tr("共 {pages} 個分頁。", pages=details["page_count"])
-            if details["unplaced_count"]:
-                names = sorted({name for entry in details["unplaced"] for name in entry["objects"]})
-                text += " " + tr("放不下 {count} 份：{objects}", count=details["unplaced_count"],
-                                 objects="、".join(names[:8]))
-            if details["limit_reached"]:
-                text += " " + tr("已達本次排版上限。")
-            self.summary.setText(text)
-            self.summary.show()
-            self.apply_button.setEnabled(True)
+            items = copy.deepcopy(self.owner.items)
+            metadata = copy.deepcopy(self.owner.metadata)
+            indices = list(self.indices)
+            parameters = copy.deepcopy(self._parameters(items, indices))
         except (ValueError, OSError) as error:
             self.apply_button.setEnabled(False)
             QMessageBox.warning(self, tr("自動排版"), str(error))
+            return
+
+        dialog_ref = weakref.ref(self)
+
+        def current_dialog():
+            if state["closed"] or state["generation"] != generation:
+                return None
+            return dialog_ref()
+
+        def succeeded(plan):
+            dialog = current_dialog()
+            if dialog is None:
+                return
+            try:
+                items, _, details = plan
+                path = Path(dialog.directory.path()) / "preview.png"
+                render_preview(items, metadata, path)
+                dialog.preview_label.setPixmap(QPixmap(str(path)).scaled(360, 360,
+                    Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                text = tr("共 {copies} 組副本；{objects} 個物件。", copies=details["copies"], objects=len(items))
+                text += " " + tr("紙張使用率 {percent:.1f}%。", percent=details["paper_utilization_percent"])
+                if details["page_count"] > 1:
+                    text += " " + tr("共 {pages} 個分頁。", pages=details["page_count"])
+                if details["unplaced_count"]:
+                    names = sorted({name for entry in details["unplaced"] for name in entry["objects"]})
+                    text += " " + tr("放不下 {count} 份：{objects}", count=details["unplaced_count"],
+                                     objects="、".join(names[:8]))
+                if details["limit_reached"]:
+                    text += " " + tr("已達本次排版上限。")
+            except (ValueError, OSError) as error:
+                dialog.plan = None
+                dialog.apply_button.setEnabled(False)
+                dialog.preview_button.setEnabled(True)
+                QMessageBox.warning(dialog, tr("自動排版"), str(error))
+                return
+            dialog.plan = plan
+            dialog.summary.setText(text)
+            dialog.summary.show()
+            dialog.preview_button.setEnabled(True)
+            dialog.apply_button.setEnabled(True)
+
+        def failed(error):
+            dialog = current_dialog()
+            if dialog is None:
+                return
+            dialog.plan = None
+            dialog.apply_button.setEnabled(False)
+            dialog.preview_button.setEnabled(True)
+            QMessageBox.warning(dialog, tr("自動排版"), error)
+
+        self.preview_button.setEnabled(False)
+        self.apply_button.setEnabled(False)
+        self.summary.setText(tr("排版中…"))
+        self.summary.show()
+
+        def pack():
+            return pack_items(items, metadata, indices, parameters)
+
+        self.owner._dispatch(pack, succeeded, failed)
+
+    def closeEvent(self, event):
+        _close_packing_preview(self._preview_state)
+        super().closeEvent(event)
+
+
+def _close_packing_preview(state):
+    if not state["closed"]:
+        state["closed"] = True
+        state["generation"] += 1
 
 
 class PlotPreviewCanvas(QWidget):

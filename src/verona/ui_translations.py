@@ -248,6 +248,7 @@ ENGLISH = {
     "本次排版最多 2000 個物件與 200 萬個切割點，請減少份數。": "A layout supports at most 2000 objects and 2 million cut points. Reduce the copy counts.",
     "本次搜尋未能放下全部指定份數。請減少份數，或嘗試允許旋轉與依輪廓排列。": "This search did not place all requested copies. Reduce counts or try rotation and contour footprints.",
     "自動排版": "Automatic layout",
+    "排版中…": "Packing…",
     "自動排版…": "Automatic layout…",
     "每組份數": "Copies per unit",
     "間距": "Gap",

@@ -1,6 +1,7 @@
 """Independent correctness checks for bounded contour nesting."""
 import math
 import os
+import time
 import unittest
 from unittest.mock import patch
 
@@ -14,6 +15,15 @@ from verona.packing import pack_items
 from verona.printing import registration_geometry
 from tests.fixtures.nesting_cases import rectangle, scenarios
 from verona.ui import PackingDialog, VeronaWindow
+
+
+def _wait_for_packing_preview(dialog, timeout=5):
+    deadline = time.monotonic() + timeout
+    while not dialog.apply_button.isEnabled() and time.monotonic() < deadline:
+        QApplication.processEvents()
+        time.sleep(.005)
+    if not dialog.apply_button.isEnabled():
+        raise AssertionError("timed out waiting for packing preview")
 
 
 def _segments(contour):
@@ -188,6 +198,7 @@ class PackingNestingTests(unittest.TestCase):
                 dialog.copies_spin.setValue(3)
                 dialog.pages_check.setChecked(True)
                 dialog.preview()
+                _wait_for_packing_preview(dialog)
                 self.assertTrue(dialog.apply_button.isEnabled())
                 return QDialog.DialogCode.Accepted
 

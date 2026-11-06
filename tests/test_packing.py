@@ -1,6 +1,7 @@
 """Packing preserves physical size and documents bounded heuristic behavior."""
 import copy
 import os
+import time
 import unittest
 from unittest.mock import patch
 
@@ -17,6 +18,15 @@ from verona.packing import pack_items
 from verona.printing import registration_geometry
 from verona.ui import VeronaWindow, PackingDialog
 from tests.test_editor_actions import image_item, rectangle
+
+
+def _wait_for_packing_preview(dialog, timeout=5):
+    deadline = time.monotonic() + timeout
+    while not dialog.apply_button.isEnabled() and time.monotonic() < deadline:
+        QApplication.processEvents()
+        time.sleep(.005)
+    if not dialog.apply_button.isEnabled():
+        raise AssertionError("timed out waiting for packing preview")
 
 
 class PackingTests(unittest.TestCase):
@@ -167,11 +177,13 @@ class PackingTests(unittest.TestCase):
                 self.assertFalse(dialog.apply_button.isEnabled())
                 dialog.copies_spin.setValue(2)
                 dialog.preview()
+                _wait_for_packing_preview(dialog)
                 self.assertTrue(dialog.apply_button.isEnabled())
                 self.assertIs(dialog.build_items(), dialog.plan)
                 dialog.gap_spin.setValue(3)
                 self.assertFalse(dialog.apply_button.isEnabled())
                 dialog.preview()
+                _wait_for_packing_preview(dialog)
                 return QDialog.DialogCode.Accepted
 
             with patch.object(PackingDialog, "exec", accept), \
